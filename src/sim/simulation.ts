@@ -20,31 +20,29 @@ export const PARAMS = {
   houseWood: 30,
   houseStone: 15,
   eatThreshold: 35,
-  eatFull: 96,
-  eatCycle: 5,
   eatHunger: 5,
   restThreshold: 25,
   restUntil: 96,
-  hungerDecay: 0.22,
+  hungerDecay: 0.18,
   staminaMove: 0.03,
   restRate: 0.55,
   restRateHouse: 1.2,
   deathStarve: 90,
   workAge: 12,
   ageTicks: 250,
-  moveSpeed: 0.12,
-  gatherInterval: 3,
+  moveSpeed: 0.18,
+  gatherInterval: 2,
   buildPerTick: 0.008,
   staminaWork: 0.05,
-  regenFood: 0.03,
+  regenFood: 0.05,
   regenWood: 0.012,
   birthEvery: 600,
-  birthFoodNeed: 80,
+  birthFoodNeed: 120,
   historyEvery: 20,
   historyMax: 900,
 } as const
 
-const CARRY_CAP: Record<ResourceType, number> = { food: 12, wood: 8, stone: 8 }
+const CARRY_CAP: Record<ResourceType, number> = { food: 16, wood: 10, stone: 10 }
 
 const SURNAMES = ['林', '陈', '赵', '周', '吴', '郑', '王', '李', '张', '刘', '黄', '杨', '徐', '孙', '马', '朱', '胡', '郭', '何', '高']
 const GIVENS = ['山', '禾', '雨', '石', '川', '木', '春', '安', '宁', '远', '舟', '岩', '桑', '野', '星', '麦', '竹', '岚', '青', '小满', '石头', '远山', '望', '临']
@@ -93,6 +91,7 @@ function makeVillager(id: number, cx: number, cy: number, rng: Rng, world: World
     facing: rng.next() < 0.5 ? 1 : -1,
     movePhase: rng.range(0, 100),
     starve: 0,
+    eatAnim: -1,
     sleepInPlace: false,
     failedTiles: [],
   }
@@ -117,6 +116,8 @@ function createInitialState(seed: number, rng: Rng): SimState {
     history: [],
     births: 0,
     deaths: 0,
+    starveDeaths: 0,
+    ageDeaths: 0,
     nextId: PARAMS.initialPop + 1,
     rngState: rng.getState(),
   }
@@ -173,11 +174,21 @@ export class Simulation {
       v.age += 1 / PARAMS.ageTicks
       v.hunger = Math.max(0, v.hunger - PARAMS.hungerDecay)
 
+      // 涓涓流进食：只在越过个人阈值时吃 1 口（自动节流），不打断任务、不丢路径。
+      // 库存低于地板（6）时排队让位给采集回款；濒死（hunger<15）才破例。
+      if (v.hunger < this.eatTrigger(v) && this.canEat(v)) {
+        const take = Math.min(1, s.stock.food)
+        s.stock.food -= take
+        s.consumed.food += take
+        v.hunger = Math.min(100, v.hunger + PARAMS.eatHunger * take)
+        v.eatAnim = s.tick
+      }
+
       // 死因一：长期饥饿
       if (v.hunger <= 0) {
         v.starve++
         if (v.starve >= PARAMS.deathStarve) {
-          this.kill(v)
+          this.kill(v, 'starve')
           continue
         }
       } else {
@@ -186,7 +197,7 @@ export class Simulation {
 
       // 死因二：年老自然衰亡
       if (v.age >= v.maxAge && rng.next() < 1 / 400) {
-        this.kill(v)
+        this.kill(v, 'age')
         continue
       }
 
@@ -227,7 +238,7 @@ export class Simulation {
     s.rngState = rng.getState()
   }
 
-  private kill(v: Villager): void {
+  private kill(v: Villager, reason: 'starve' | 'age'): void {
     if (!v.alive) return
     v.alive = false
     v.task = 'idle'
@@ -235,33 +246,33 @@ export class Simulation {
     v.pathGoal = null
     v.deadTick = this.state.tick
     this.state.deaths++
+    if (reason === 'starve') this.state.starveDeaths = (this.state.starveDeaths ?? 0) + 1
+    else this.state.ageDeaths = (this.state.ageDeaths ?? 0) + 1
     const site = this.state.sites.find((x) => x.builderId === v.id)
     if (site) site.builderId = null
   }
 
-  /** 个体进食阈值：错峰触发，避免全村同时开吃造成振荡 */
-  private eatTrigger(v: Villager): number {
-    return PARAMS.eatThreshold + (v.id % 5) * 3
+  /** 是否允许开吃：库存低于地板（6）时排队者先去干活，濒死（hunger<15）才破例 */
+  private canEat(v: Villager): boolean {
+    const floor = v.hunger < 15 ? 1 : 6
+    return this.state.stock.food >= floor
   }
 
-  /** 行动分发：生存中断优先，其次移动，到达后按任务继续 */
+  /** 个体进食阈值：30~60 宽带错峰，避免全班同时补课击穿库存 */
+  private eatTrigger(v: Villager): number {
+    return PARAMS.eatThreshold - 5 + (v.id % 7) * 5
+  }
+
+  /** 行动分发：移动优先，到达后按任务继续（进食已在 tick 层涓涓流处理） */
   private act(v: Villager): void {
-    const s = this.state
-    // 生存中断：无论手上在干什么，饿了立刻打断去吃
-    if (v.task !== 'eat' && v.hunger < this.eatTrigger(v) && s.stock.food >= 1) {
-      v.path = []
-      v.pathGoal = null
-      v.gatherTile = null
-      v.task = 'idle'
-      v.cool = 0
-    }
     if (v.path.length > 0) {
       this.stepPath(v)
       return
     }
     switch (v.task) {
       case 'eat':
-        this.actEat(v)
+        // 旧存档残留任务：进食已全局化，降级为空闲
+        v.task = 'idle'
         break
       case 'rest':
         this.actRest(v)
@@ -310,18 +321,14 @@ export class Simulation {
     v.stamina = Math.max(0, v.stamina - PARAMS.staminaMove)
   }
 
-  /** 按需求优先级选择任务 */
+  /** 按需求优先级选择任务（进食不占用任务槽，走 tick 层涓涓流） */
   private chooseTask(v: Villager): void {
     const s = this.state
     v.work = 0
     v.pathGoal = null
 
-    // 幼儿：只吃、休息、玩耍
+    // 幼儿：休息、玩耍（进食由涓涓流覆盖）
     if (v.age < PARAMS.workAge) {
-      if (v.hunger < 45 && s.stock.food >= 1) {
-        v.task = 'eat'
-        return
-      }
       if (v.stamina < 30) {
         v.task = 'rest'
         v.sleepInPlace = false
@@ -333,30 +340,25 @@ export class Simulation {
       return
     }
 
-    // 1) 饿先吃（公共口粮，个体阈值错峰）
-    if (v.hunger < this.eatTrigger(v) && s.stock.food >= 1) {
-      v.task = 'eat'
-      return
-    }
-    // 2) 累了休息（有房睡房）
+    // 1) 累了休息（有房睡房）
     if (v.stamina < PARAMS.restThreshold) {
       v.task = 'rest'
       v.sleepInPlace = false
       return
     }
-    // 3) 手上有货先交库
+    // 2) 手上有货先交库
     if (v.carry > 0.05 && v.carryType) {
       v.task = 'deposit'
       return
     }
-    // 4) 工地缺人去建设（阶段 C 启用；无工地则采集）
+    // 3) 工地缺人去建设（无工地则采集）
     const site = s.sites.find((x) => x.builderId === null || x.builderId === v.id)
     if (site) {
       site.builderId = v.id
       v.task = 'build'
       return
     }
-    // 5) 按村庄短缺采集
+    // 4) 按村庄短缺采集
     v.task = 'gather'
     v.gatherTile = null
   }
@@ -504,22 +506,6 @@ export class Simulation {
         }
       }
       v.work++
-    }
-  }
-
-  private actEat(v: Villager): void {
-    const s = this.state
-    if (v.hunger >= PARAMS.eatFull || s.stock.food < 1) {
-      v.task = 'idle'
-      v.work = 0
-      return
-    }
-    v.work++
-    if (v.work % PARAMS.eatCycle === 0) {
-      const take = Math.min(1, s.stock.food)
-      s.stock.food -= take
-      s.consumed.food += take
-      v.hunger = Math.min(100, v.hunger + PARAMS.eatHunger * take)
     }
   }
 

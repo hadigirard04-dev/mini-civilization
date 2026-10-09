@@ -46,6 +46,8 @@ export interface Villager {
   movePhase: number
   /** 连续饥饿 tick 数 */
   starve: number
+  /** 最近一次就地进食的 tick（渲染动画用；-1 = 未进食） */
+  eatAnim: number
   /** 休息时是否原地睡（寻路失败兜底） */
   sleepInPlace: boolean
   /** 近期寻路失败的格（避免反复撞死路） */
@@ -95,6 +97,9 @@ export interface SimState {
   history: HistoryPoint[]
   births: number
   deaths: number
+  /** 死因统计：饿死（经济崩溃的信号）与老死（自然更替） */
+  starveDeaths: number
+  ageDeaths: number
   nextId: number
   rngState: number
 }

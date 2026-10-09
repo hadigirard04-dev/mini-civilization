@@ -34,7 +34,7 @@ function drawGrave(ctx: CanvasRenderingContext2D, v: Villager): void {
   ctx.fillRect(px - 2, py - 3.5, 4, 1)
 }
 
-function drawVillager(ctx: CanvasRenderingContext2D, v: Villager, timeMs: number): void {
+function drawVillager(ctx: CanvasRenderingContext2D, v: Villager, timeMs: number, tick: number): void {
   const px = Math.round(v.x * TILE)
   const py = Math.round(v.y * TILE)
   const walking = v.path.length > 0
@@ -87,7 +87,8 @@ function drawVillager(ctx: CanvasRenderingContext2D, v: Villager, timeMs: number
   ctx.fillRect(-3, -2 - bob, 6, 5)
 
   // 手臂（进食时抬起；建设时挥锤）
-  if (v.task === 'eat' && !walking) {
+  if (v.eatAnim != null && v.eatAnim >= 0 && tick - v.eatAnim < 10) {
+    // 就地进食：抬手送食 + 食物方块
     const raise = Math.floor(timeMs / 220 + v.id) % 2
     ctx.fillStyle = SKIN_2
     ctx.fillRect(v.facing > 0 ? 3 : -4.5, -4 + raise * 2, 2, 2)
@@ -258,7 +259,7 @@ export function drawEntities(
     if (!v.alive) drawGrave(ctx, v)
   }
   for (const v of state.villagers) {
-    if (v.alive) drawVillager(ctx, v, timeMs)
+    if (v.alive) drawVillager(ctx, v, timeMs, state.tick)
   }
 
   // 选中高亮

@@ -57,19 +57,23 @@ describe('居民状态机', () => {
     expect(movedCount).toBeGreaterThan(3)
   })
 
-  it('饥饿的居民会中断当前任务，立即去进食', () => {
+  it('饥饿的居民就地进食：不打断手头任务与路径，库存扣减、饥饿回升', () => {
     const sim = new Simulation(13)
     const v = sim.state.villagers[0]
     v.hunger = 10
     v.task = 'deposit'
-    v.carry = 5
-    v.carryType = 'wood'
     v.path = [{ x: 31, y: 31 }]
     v.pathGoal = { x: 31, y: 31 }
+    v.carry = 5
+    v.carryType = 'wood'
     sim.state.stock.food = 100
+    const foodBefore = sim.state.stock.food
+    const hungerBefore = v.hunger
     sim.tick()
-    expect(v.task).toBe('eat')
-    expect(v.path.length).toBe(0)
+    expect(v.task).toBe('deposit')
+    expect(v.path.length).toBe(1)
+    expect(v.hunger).toBeGreaterThan(hungerBefore)
+    expect(sim.state.stock.food).toBeLessThan(foodBefore)
   })
 
   it('居民移动与停留始终不进入水域', () => {

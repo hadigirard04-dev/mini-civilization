@@ -190,9 +190,10 @@ body {
   color: var(--ink);
 }
 
-/* 控制 */
+/* 控制：暂停全宽，速度键五档均分 */
 .control-row {
   display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 
@@ -235,8 +236,8 @@ body {
 }
 
 .seg {
+  flex: 1;
   height: 30px;
-  width: 42px;
   background: var(--panel-2);
   border: none;
   border-left: 1px solid var(--line);

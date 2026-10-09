@@ -110,7 +110,7 @@ export default function Sidebar({
             {ui.paused ? '▶ 开始' : '⏸ 暂停'}
           </button>
           <div className="segmented" role="group" aria-label="模拟速度">
-            {[1, 2, 5].map((n) => (
+            {[1, 2, 5, 10, 20].map((n) => (
               <button key={n} className={`seg${ui.speed === n ? ' active' : ''}`} onClick={() => onSpeed(n)}>
                 {n}×
               </button>

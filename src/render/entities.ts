@@ -243,7 +243,24 @@ function drawLabels(
   ctx.restore()
 }
 
-/** 实体层：交粮点 → 住房/工地 → 尸体 → 居民 → 选中高亮 → 屏幕标签 */
+const ROAD_MIN = 25
+
+/** 土路：踩踏密集的格子渐变为土色（画面层的「痕迹」） */
+function drawRoads(ctx: CanvasRenderingContext2D, state: SimState): void {
+  const w = state.world
+  const size = w.size
+  const walk = state.walk
+  if (!walk) return
+  ctx.fillStyle = 'rgba(124, 98, 62, 0.34)'
+  for (let i = 0; i < walk.length; i++) {
+    if (walk[i] < ROAD_MIN) continue
+    const t = w.tiles[i].terrain
+    if (t === 2) continue // 水域
+    ctx.fillRect((i % size) * TILE + 3, ((i / size) | 0) * TILE + 3, TILE - 6, TILE - 6)
+  }
+}
+
+/** 实体层：土路 → 交粮点 → 住房/工地 → 尸体 → 居民 → 选中高亮 → 屏幕标签 */
 export function drawEntities(
   ctx: CanvasRenderingContext2D,
   state: SimState,
@@ -252,6 +269,7 @@ export function drawEntities(
   timeMs: number,
   selection: Selection,
 ): void {
+  drawRoads(ctx, state)
   drawStockpile(ctx, state)
   for (const b of state.buildings) drawHouse(ctx, b.x, b.y)
   for (const s of state.sites) drawSite(ctx, s.x, s.y, s.progress, timeMs)

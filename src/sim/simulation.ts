@@ -118,6 +118,10 @@ function createInitialState(seed: number, rng: Rng): SimState {
     deaths: 0,
     starveDeaths: 0,
     ageDeaths: 0,
+    journal: [],
+    milestones: [],
+    walk: new Array<number>(world.size * world.size).fill(0),
+    nextEventAt: 1500,
     nextId: PARAMS.initialPop + 1,
     rngState: rng.getState(),
   }
@@ -141,6 +145,12 @@ export class Simulation {
       this.state = createInitialState(seedOrState, this.rng)
     } else {
       this.state = seedOrState
+      // 旧存档缺省字段回填（向前兼容）
+      const n = seedOrState.world.size * seedOrState.world.size
+      if (!this.state.journal) this.state.journal = []
+      if (!this.state.milestones) this.state.milestones = []
+      if (!this.state.walk || this.state.walk.length !== n) this.state.walk = new Array<number>(n).fill(0)
+      if (!this.state.nextEventAt) this.state.nextEventAt = seedOrState.tick + 1500
       this.rng = createRng(0)
       this.rng.setState(seedOrState.rngState)
     }
@@ -220,6 +230,13 @@ export class Simulation {
     this.maybeCreateSite()
     this.regen()
     this.maybeBirth()
+
+    // 纪事：里程碑检查（每 100 tick）与随机事件调度
+    if (s.tick % 100 === 0) this.checkMilestones()
+    if (s.tick >= s.nextEventAt) {
+      this.triggerEvent()
+      s.nextEventAt = s.tick + 600 + Math.floor(this.rng.next() * 900)
+    }
 
     // 历史采样（供统计曲线）
     if (s.tick % PARAMS.historyEvery === 0) {
@@ -319,6 +336,84 @@ export class Simulation {
     }
     v.movePhase += speed * 16
     v.stamina = Math.max(0, v.stamina - PARAMS.staminaMove)
+
+    // 足迹：走过的格子累积踩踏，密集处渲染为土路
+    const world = this.state.world
+    const wi = Math.floor(v.y) * world.size + Math.floor(v.x)
+    if (wi >= 0 && wi < this.state.walk.length) this.state.walk[wi]++
+  }
+
+  /** 写入纪事（最新在前，容量 60） */
+  private log(kind: 'milestone' | 'event', text: string): void {
+    const s = this.state
+    s.journal.unshift({ tick: s.tick, kind, text })
+    if (s.journal.length > 60) s.journal.length = 60
+  }
+
+  /** 里程碑检查：一次性达成即记录 */
+  private checkMilestones(): void {
+    const s = this.state
+    const alive = this.aliveCount()
+    const checks: Array<[string, boolean, string]> = [
+      ['first_house', s.buildings.length >= 1, '第一座房屋落成，村庄有了家'],
+      ['pop30', alive >= 30, '人口达到 30'],
+      ['pop50', alive >= 50, '人口达到 50'],
+      ['day100', s.tick >= 5940, '村庄安然度过第 100 天'],
+      ['houses5', s.buildings.length >= 5, '住房增至 5 座'],
+      ['births10', s.births >= 10, '累计出生达 10 人'],
+    ]
+    for (const [id, ok, text] of checks) {
+      if (ok && !s.milestones.includes(id)) {
+        s.milestones.push(id)
+        this.log('milestone', text)
+      }
+    }
+  }
+
+  /** 随机事件：库存一次性效果 + 纪事（绝不让资源为负） */
+  private triggerEvent(): void {
+    const s = this.state
+    const roll = this.rng.nextInt(6)
+    switch (roll) {
+      case 0: {
+        const gain = Math.round(Math.max(30, s.stock.food * 0.3))
+        s.stock.food += gain
+        this.log('event', `风调雨顺，粮食丰收（食物 +${gain}）`)
+        break
+      }
+      case 1: {
+        const loss = Math.round(s.stock.food * 0.25)
+        s.stock.food -= loss
+        this.log('event', `蝗虫过境，啃食了存粮（食物 −${loss}）`)
+        break
+      }
+      case 2:
+        s.stock.food += 50
+        this.log('event', '狩猎队满载而归（食物 +50）')
+        break
+      case 3:
+        s.stock.stone += 30
+        this.log('event', '有人探到新石脉（石头 +30）')
+        break
+      case 4: {
+        const alive = this.aliveCount()
+        if (alive < 60) {
+          const p = makeVillager(s.nextId++, s.world.size / 2, s.world.size / 2, this.rng, s.world)
+          s.villagers.push(p)
+          this.log('event', `旅人${p.name}路过村庄，留了下来`)
+        } else {
+          s.stock.wood += 40
+          this.log('event', '过路商人留下了赠礼（木材 +40）')
+        }
+        break
+      }
+      default: {
+        const gain = 40
+        s.stock.food += gain
+        this.log('event', `雨后浆果格外饱满（食物 +${gain}）`)
+        break
+      }
+    }
   }
 
   /** 按需求优先级选择任务（进食不占用任务槽，走 tick 层涓涓流） */

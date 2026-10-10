@@ -51,6 +51,7 @@ function makeSnapshot(sim: Simulation, selection: Selection): UiSnapshot {
     deaths: s.deaths,
     stock: { ...s.stock },
     history: s.history,
+    journal: s.journal ?? [],
     villager,
     tile,
   }

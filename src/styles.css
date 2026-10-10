@@ -512,6 +512,55 @@ body {
   line-height: 1.7;
 }
 
+/* 纪事 */
+.journal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.journal-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  animation: fade-in 0.25s ease-out;
+}
+
+.j-day {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+}
+
+.j-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  align-self: center;
+}
+
+.journal-list.milestone .j-dot,
+li.milestone .j-dot {
+  background: var(--amber);
+}
+
+li.event .j-dot {
+  background: var(--moss);
+}
+
+li.milestone .j-text {
+  color: var(--ink);
+  font-weight: 500;
+}
+
 /* 滚动条 */
 .sidebar::-webkit-scrollbar {
   width: 8px;

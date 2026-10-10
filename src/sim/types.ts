@@ -83,6 +83,13 @@ export interface HistoryPoint {
   stone: number
 }
 
+/** 纪事条目：里程碑（成就）或随机事件 */
+export interface JournalEntry {
+  tick: number
+  kind: 'milestone' | 'event'
+  text: string
+}
+
 /** 全部可序列化的模拟状态（存档 = 直接 JSON 化本结构） */
 export interface SimState {
   tick: number
@@ -100,6 +107,14 @@ export interface SimState {
   /** 死因统计：饿死（经济崩溃的信号）与老死（自然更替） */
   starveDeaths: number
   ageDeaths: number
+  /** 纪事（里程碑 + 随机事件），最新在前 */
+  journal: JournalEntry[]
+  /** 已达成的里程碑 id（防重复记录） */
+  milestones: string[]
+  /** 每格累计踩踏步数（渲染土路用） */
+  walk: number[]
+  /** 下一次随机事件的 tick */
+  nextEventAt: number
   nextId: number
   rngState: number
 }

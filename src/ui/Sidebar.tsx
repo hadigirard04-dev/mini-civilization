@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { HistoryPoint, Stock, TaskKind } from '../sim/types'
+import type { HistoryPoint, JournalEntry, Stock, TaskKind } from '../sim/types'
 import type { ResourceType, Terrain } from '../sim/world'
 import type { Selection } from '../render/entities'
 import StatsChart, { SERIES } from './StatsChart'
@@ -37,6 +37,7 @@ export interface UiSnapshot {
   deaths: number
   stock: Stock
   history: HistoryPoint[]
+  journal: JournalEntry[]
   villager: SelectedVillagerInfo | null
   tile: SelectedTileInfo | null
 }
@@ -216,6 +217,24 @@ export default function Sidebar({
           ))}
         </div>
         <StatsChart history={ui.history} tick={ui.tick} />
+      </section>
+
+      {/* 纪事：里程碑与随机事件 */}
+      <section className="panel">
+        <h2 className="panel-title">纪事</h2>
+        {ui.journal.length === 0 ? (
+          <p className="hint">尚无大事发生。第一座房屋、第 100 天、旅人来访……都会记在这里。</p>
+        ) : (
+          <ul className="journal-list">
+            {ui.journal.slice(0, 8).map((e, i) => (
+              <li key={`${e.tick}-${i}`} className={e.kind}>
+                <span className="j-day">第{Math.floor(e.tick / 60) + 1}天</span>
+                <i className="j-dot" />
+                <span className="j-text">{e.text}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       {/* 详情 */}

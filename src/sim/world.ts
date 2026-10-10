@@ -4,8 +4,10 @@ export const GRASS = 0
 export const FOREST = 1
 export const WATER = 2
 export const STONE = 3
+/** 农田：由草地开垦而来，不参与自然生成 */
+export const FARMLAND = 4
 
-export type Terrain = 0 | 1 | 2 | 3
+export type Terrain = 0 | 1 | 2 | 3 | 4
 
 export type ResourceType = 'food' | 'wood' | 'stone'
 
@@ -32,6 +34,7 @@ const STONE_MAX = 40
 export function resourceType(terrain: Terrain): ResourceType | null {
   switch (terrain) {
     case GRASS:
+    case FARMLAND:
       return 'food'
     case FOREST:
       return 'wood'

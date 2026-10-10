@@ -512,6 +512,29 @@ body {
   line-height: 1.7;
 }
 
+/* 农田开垦 */
+.farm-btn {
+  width: 100%;
+  margin-top: 8px;
+  border-color: var(--moss-deep);
+  color: var(--moss);
+}
+
+.farm-btn:hover:not(:disabled) {
+  background: rgba(127, 174, 78, 0.12);
+  border-color: var(--moss);
+}
+
+.farm-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.farm-tag {
+  color: var(--moss);
+  font-size: 12px;
+}
+
 /* 纪事 */
 .journal-list {
   list-style: none;

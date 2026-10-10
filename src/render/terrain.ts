@@ -1,5 +1,5 @@
 import { createRng, type Rng } from '../sim/rng'
-import { FOREST, GRASS, STONE, WATER, type World } from '../sim/world'
+import { FARMLAND, FOREST, GRASS, STONE, WATER, type World } from '../sim/world'
 import { TILE } from './camera'
 
 /** 地形配色：自然、分层的像素风 */
@@ -113,6 +113,19 @@ function drawTile(ctx: CanvasRenderingContext2D, world: World, x: number, y: num
       ctx.fillStyle = STONE_DARK
       ctx.fillRect(px + 2 + rng.nextInt(6), py + 3 + rng.nextInt(6), 3 + rng.nextInt(3), 2)
       speckle(ctx, px, py, STONE_LIGHT, 5, rng)
+      break
+    }
+    case FARMLAND: {
+      // 深棕耕地 + 横向垄沟 + 零星绿芽
+      fillBase(ctx, px, py, '#6b4a2a')
+      ctx.fillStyle = '#5a3d21'
+      for (let r = 1; r < TILE; r += 4) {
+        ctx.fillRect(px, py + r, TILE, 2)
+      }
+      ctx.fillStyle = '#7fae4e'
+      for (let i = 0; i < 5; i++) {
+        ctx.fillRect(px + 1 + rng.nextInt(TILE - 3), py + 1 + rng.nextInt(TILE - 3), 2, 1)
+      }
       break
     }
   }

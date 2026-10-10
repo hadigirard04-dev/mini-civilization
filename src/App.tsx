@@ -332,6 +332,19 @@ export default function App() {
       flashMsg('读取失败')
     }
   }
+  const reclaim = () => {
+    const sel = selectionRef.current
+    if (!sel || sel.kind !== 'tile') return
+    const sim = simRef.current!
+    const ok = sim.reclaimToFarmland(sel.x, sel.y)
+    if (ok) {
+      setEpoch((e) => e + 1) // 重建离屏地形层
+      flashMsg('已开垦为农田（木材 −5）')
+      setUi(makeSnapshot(sim, selectionRef.current))
+    } else {
+      flashMsg('此处无法开垦')
+    }
+  }
 
   return (
     <div className="app">
@@ -362,6 +375,7 @@ export default function App() {
           onSave={doSave}
           onLoad={doLoad}
           saveMsg={saveMsg}
+          onReclaim={reclaim}
         />
       </div>
     </div>

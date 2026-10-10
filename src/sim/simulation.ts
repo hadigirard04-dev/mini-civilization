@@ -2,6 +2,7 @@ import { findPath } from './path'
 import { createRng, type Rng } from './rng'
 import type { SimState, Villager } from './types'
 import {
+  FARMLAND,
   FOREST,
   GRASS,
   STONE,
@@ -36,6 +37,10 @@ export const PARAMS = {
   staminaWork: 0.05,
   regenFood: 0.05,
   regenWood: 0.012,
+  /** 农田：开垦成本与高产参数 */
+  farmWoodCost: 5,
+  farmMax: 60,
+  regenFarm: 0.15,
   birthEvery: 600,
   birthFoodNeed: 120,
   historyEvery: 20,
@@ -479,13 +484,20 @@ export class Simulation {
     let bestD = Infinity
     for (let i = 0; i < w.tiles.length; i++) {
       const t = w.tiles[i]
-      if (t.terrain !== terrain || t.resource < 1) continue
+      if (t.resource < 1) continue
+      // 食物可来自草地或农田；农田加权视为更近，成为主粮源
+      if (type === 'food') {
+        if (t.terrain !== GRASS && t.terrain !== FARMLAND) continue
+      } else if (t.terrain !== terrain) {
+        continue
+      }
       if (v.failedTiles.includes(i)) continue
       const x = i % w.size
       const y = (i / w.size) | 0
       const dx = x + 0.5 - v.x
       const dy = y + 0.5 - v.y
-      const d = dx * dx + dy * dy
+      let d = dx * dx + dy * dy
+      if (t.terrain === FARMLAND) d *= 0.4
       if (d < bestD) {
         bestD = d
         best = i
@@ -770,7 +782,7 @@ export class Simulation {
     }
   }
 
-  /** 地表资源有限再生（草地食物 / 森林木材，石头不可再生） */
+  /** 地表资源有限再生（草地食物 / 农田高产 / 森林木材，石头不可再生） */
   private regen(): void {
     const tiles = this.state.world.tiles
     for (let i = 0; i < tiles.length; i++) {
@@ -778,6 +790,8 @@ export class Simulation {
       if (t.max <= 0 || t.resource >= t.max) continue
       if (t.terrain === GRASS) {
         t.resource = Math.min(t.max, t.resource + PARAMS.regenFood)
+      } else if (t.terrain === FARMLAND) {
+        t.resource = Math.min(t.max, t.resource + PARAMS.regenFarm)
       } else if (t.terrain === FOREST) {
         t.resource = Math.min(t.max, t.resource + PARAMS.regenWood)
       }
@@ -811,5 +825,33 @@ export class Simulation {
   /** 手动补充资源（玩家干预，永不为负） */
   grant(type: ResourceType, amount: number): void {
     this.state.stock[type] = Math.max(0, this.state.stock[type] + amount)
+  }
+
+  /**
+   * 开垦农田：草地 → 高产农田，消耗木材并记账。
+   * 中央广场保留区不可开垦。成功后 UI 需重建离屏地形层（setEpoch）。
+   */
+  reclaimToFarmland(x: number, y: number): boolean {
+    const s = this.state
+    const w = s.world
+    if (x < 0 || y < 0 || x >= w.size || y >= w.size) return false
+    const tile = w.tiles[y * w.size + x]
+    if (tile.terrain !== GRASS) return false
+    const cx = w.size / 2
+    const cy = w.size / 2
+    if (Math.abs(x + 0.5 - cx) <= 2.4 && Math.abs(y + 0.5 - cy) <= 2.4) return false
+    if (s.stock.wood < PARAMS.farmWoodCost) return false
+
+    s.stock.wood -= PARAMS.farmWoodCost
+    s.consumed.wood += PARAMS.farmWoodCost
+    tile.terrain = FARMLAND
+    tile.max = PARAMS.farmMax
+    if (tile.resource > tile.max) tile.resource = tile.max
+
+    if (!s.milestones.includes('first_farm')) {
+      s.milestones.push('first_farm')
+      this.log('milestone', '第一块农田开垦，刀耕火种')
+    }
+    return true
   }
 }

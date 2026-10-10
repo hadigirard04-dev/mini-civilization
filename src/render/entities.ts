@@ -251,7 +251,7 @@ function drawRoads(ctx: CanvasRenderingContext2D, state: SimState): void {
   const size = w.size
   const walk = state.walk
   if (!walk) return
-  ctx.fillStyle = 'rgba(124, 98, 62, 0.34)'
+  ctx.fillStyle = 'rgba(124, 96, 58, 0.44)'
   for (let i = 0; i < walk.length; i++) {
     if (walk[i] < ROAD_MIN) continue
     const t = w.tiles[i].terrain

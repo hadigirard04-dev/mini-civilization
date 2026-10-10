@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { HistoryPoint, JournalEntry, Stock, TaskKind } from '../sim/types'
 import type { ResourceType, Terrain } from '../sim/world'
+import { GRASS } from '../sim/world'
 import type { Selection } from '../render/entities'
 import StatsChart, { SERIES } from './StatsChart'
 
@@ -78,6 +79,7 @@ interface Props {
   onSave: () => void
   onLoad: () => void
   saveMsg: string
+  onReclaim: () => void
 }
 
 export default function Sidebar({
@@ -91,6 +93,7 @@ export default function Sidebar({
   onSave,
   onLoad,
   saveMsg,
+  onReclaim,
 }: Props) {
   const [seedText, setSeedText] = useState('')
   const day = Math.floor(ui.tick / 60) + 1
@@ -295,6 +298,22 @@ export default function Sidebar({
               </span>
             </div>
             {ui.tile.max > 0 && <div className="detail-row">{bar((ui.tile.resource / ui.tile.max) * 100, '#7fae4e')}</div>}
+            {ui.tile.terrain === GRASS && (
+              <button
+                className="btn farm-btn"
+                disabled={ui.stock.wood < 5}
+                onClick={onReclaim}
+                title="农田再生速度是草地的 3 倍，上限 60"
+              >
+                {ui.stock.wood >= 5 ? '开垦为农田（木材 −5）' : '开垦需 5 木材'}
+              </button>
+            )}
+            {ui.tile.terrain === 4 && (
+              <div className="detail-row">
+                <span>耕作等级</span>
+                <span className="farm-tag">高产农田 · 再生 ×3</span>
+              </div>
+            )}
           </div>
         ) : (
           <p className="hint">点击地图上的居民或格子查看详情；拖动平移、滚轮缩放。</p>

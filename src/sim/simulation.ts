@@ -31,21 +31,23 @@ export const PARAMS = {
   deathStarve: 90,
   workAge: 12,
   ageTicks: 250,
-  moveSpeed: 0.18,
+  moveSpeed: 0.21,
   gatherInterval: 2,
   buildPerTick: 0.008,
   staminaWork: 0.05,
-  regenFood: 0.05,
+  regenFood: 0.09,
   regenWood: 0.012,
   /** 农田：开垦成本与高产参数 */
   farmWoodCost: 5,
   farmMax: 60,
-  regenFarm: 0.15,
+  regenFarm: 0.24,
   /** 自动开垦：农田上限与启动木材线（不抢 30 的建房料） */
   farmCap: 12,
   farmAutoWood: 55,
-  birthEvery: 600,
-  birthFoodNeed: 120,
+  birthEvery: 450,
+  /** 出生：库存门槛与真实消耗分离（门槛过高会卡死生育窗口，消耗过大会连锁断档） */
+  birthFoodNeed: 70,
+  birthFoodCost: 40,
   historyEvery: 20,
   historyMax: 900,
 } as const
@@ -84,7 +86,7 @@ function makeVillager(id: number, cx: number, cy: number, rng: Rng, world: World
     hunger: rng.range(70, 100),
     stamina: rng.range(85, 100),
     age: Math.floor(rng.range(18, 43)),
-    maxAge: rng.range(58, 76),
+    maxAge: rng.range(64, 84),
     task: 'idle',
     path: [],
     pathGoal: null,
@@ -492,7 +494,8 @@ export class Simulation {
     for (let i = 0; i < w.tiles.length; i++) {
       const t = w.tiles[i]
       if (t.resource < 1) continue
-      // 食物可来自草地或农田；农田加权视为更近，成为主粮源
+      // 食物可来自草地或农田：一律就近采集（效率优先，不做农田加权——
+      // 加权会让居民舍近求远，反而拖垮弱地形局的产出）
       if (type === 'food') {
         if (t.terrain !== GRASS && t.terrain !== FARMLAND) continue
       } else if (t.terrain !== terrain) {
@@ -503,8 +506,7 @@ export class Simulation {
       const y = (i / w.size) | 0
       const dx = x + 0.5 - v.x
       const dy = y + 0.5 - v.y
-      let d = dx * dx + dy * dy
-      if (t.terrain === FARMLAND) d *= 0.4
+      const d = dx * dx + dy * dy
       if (d < bestD) {
         bestD = d
         best = i
@@ -854,8 +856,8 @@ export class Simulation {
     if (alive >= this.capacity) return
     if (adults < 2) return
     if (s.stock.food < PARAMS.birthFoodNeed) return
-    s.stock.food -= PARAMS.birthFoodNeed
-    s.consumed.food += PARAMS.birthFoodNeed
+    s.stock.food -= PARAMS.birthFoodCost
+    s.consumed.food += PARAMS.birthFoodCost
     const baby = makeVillager(s.nextId++, s.world.size / 2, s.world.size / 2, this.rng, s.world)
     baby.age = 0
     baby.hunger = 90

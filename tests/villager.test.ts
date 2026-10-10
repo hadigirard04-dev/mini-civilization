@@ -48,11 +48,13 @@ describe('居民状态机', () => {
 
   it('居民会持续移动（不在原地静止）', () => {
     const sim = new Simulation(7)
-    const start = sim.state.villagers.map((v) => ({ x: v.x, y: v.y }))
+    const start = new Map(sim.state.villagers.map((v) => [v.id, { x: v.x, y: v.y }]))
     for (let i = 0; i < 500; i++) sim.tick()
-    const movedCount = sim.state.villagers.filter((v, i) => {
+    const movedCount = sim.state.villagers.filter((v) => {
       if (!v.alive) return false
-      return Math.abs(v.x - start[i].x) + Math.abs(v.y - start[i].y) > 0.5
+      const s0 = start.get(v.id)
+      if (!s0) return false // 测试期间出生的新成员不计入
+      return Math.abs(v.x - s0.x) + Math.abs(v.y - s0.y) > 0.5
     }).length
     expect(movedCount).toBeGreaterThan(3)
   })

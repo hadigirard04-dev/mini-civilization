@@ -7,10 +7,29 @@
 ```bash
 npm install     # 安装依赖（首次）
 npm run dev     # 开发预览 → http://localhost:5173
-npm test        # 自动化测试（7 个文件 / 27 项用例）
+npm test        # 自动化测试（8 个文件 / 28 项用例）
 npm run build   # 类型检查 + 生产构建 → dist/
 npm run preview # 预览生产构建
 ```
+
+## 部署为公网网址（手机可打开）
+
+项目是纯静态前端，部署即得永久网址。仓库已内置 GitHub Actions 工作流（`.github/workflows/deploy.yml`）：**push 到 `master` 自动测试、构建并部署**。
+
+首次部署两步：
+
+1. 仓库 **Settings → Pages → Source** 选 `GitHub Actions`（只做一次）。
+2. push 代码后等 Actions 跑完（约 1 分钟），网址：
+
+```
+https://<你的用户名>.github.io/mini-civilization/
+```
+
+- **手机**：浏览器直接打开上述网址即可玩，窄屏已适配（地图在上、操作栏在下）。
+- **本地验证生产路径**：`npm run build -- --base=/mini-civilization/ && npm run preview`。
+- **存档**：每个设备/浏览器的 localStorage 独立，手机与电脑存档互不相通。
+- **长久性**：静态托管无过期机制；源码与构建均在本地 git，随时可换托管商重新部署（换家 5 分钟，网址可变、游戏不丢）。
+- 后续更新：改完代码 `git push` 即自动更新线上版本。
 
 ## 操作说明
 

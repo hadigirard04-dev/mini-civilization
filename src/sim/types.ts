@@ -61,6 +61,8 @@ export interface BuildSite {
   /** 施工进度 0~1 */
   progress: number
   builderId: number | null
+  /** 工地类型：住房或农田（旧存档缺省视为住房） */
+  type?: 'house' | 'farm'
 }
 
 export interface Building {
@@ -107,6 +109,8 @@ export interface SimState {
   /** 死因统计：饿死（经济崩溃的信号）与老死（自然更替） */
   starveDeaths: number
   ageDeaths: number
+  /** 地形变更计数（农田落成等），UI 据此重建离屏地形层 */
+  worldVersion: number
   /** 纪事（里程碑 + 随机事件），最新在前 */
   journal: JournalEntry[]
   /** 已达成的里程碑 id（防重复记录） */

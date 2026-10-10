@@ -39,6 +39,7 @@ export interface UiSnapshot {
   stock: Stock
   history: HistoryPoint[]
   journal: JournalEntry[]
+  worldVersion: number
   villager: SelectedVillagerInfo | null
   tile: SelectedTileInfo | null
 }

@@ -52,6 +52,7 @@ function makeSnapshot(sim: Simulation, selection: Selection): UiSnapshot {
     stock: { ...s.stock },
     history: s.history,
     journal: s.journal ?? [],
+    worldVersion: s.worldVersion ?? 0,
     villager,
     tile,
   }
@@ -79,6 +80,7 @@ export default function App() {
   const viewRef = useRef<View>({ w: 0, h: 0, dpr: 1 })
   const terrainRef = useRef<HTMLCanvasElement | null>(null)
   const selectionRef = useRef<Selection>(null)
+  const worldVersionRef = useRef(0)
 
   const [epoch, setEpoch] = useState(0)
   const [selection, setSelection] = useState<Selection>(null)
@@ -140,11 +142,17 @@ export default function App() {
     return () => cancelAnimationFrame(raf)
   }, [])
 
-  // 侧栏快照（200ms 节流）
+  // 侧栏快照（200ms 节流）；地形变更（农田落成）时重建离屏地形层
   useEffect(() => {
     const timer = window.setInterval(() => {
       const sim = simRef.current
-      if (sim) setUi(makeSnapshot(sim, selectionRef.current))
+      if (!sim) return
+      const snap = makeSnapshot(sim, selectionRef.current)
+      if (snap.worldVersion !== worldVersionRef.current) {
+        worldVersionRef.current = snap.worldVersion
+        terrainRef.current = buildTerrainCanvas(sim.state.world)
+      }
+      setUi(snap)
     }, 200)
     return () => window.clearInterval(timer)
   }, [])
@@ -338,7 +346,6 @@ export default function App() {
     const sim = simRef.current!
     const ok = sim.reclaimToFarmland(sel.x, sel.y)
     if (ok) {
-      setEpoch((e) => e + 1) // 重建离屏地形层
       flashMsg('已开垦为农田（木材 −5）')
       setUi(makeSnapshot(sim, selectionRef.current))
     } else {

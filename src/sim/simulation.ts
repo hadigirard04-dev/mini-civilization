@@ -41,6 +41,9 @@ export const PARAMS = {
   farmWoodCost: 5,
   farmMax: 60,
   regenFarm: 0.15,
+  /** 自动开垦：农田上限与启动木材线（不抢 30 的建房料） */
+  farmCap: 12,
+  farmAutoWood: 55,
   birthEvery: 600,
   birthFoodNeed: 120,
   historyEvery: 20,
@@ -123,6 +126,7 @@ function createInitialState(seed: number, rng: Rng): SimState {
     deaths: 0,
     starveDeaths: 0,
     ageDeaths: 0,
+    worldVersion: 0,
     journal: [],
     milestones: [],
     walk: new Array<number>(world.size * world.size).fill(0),
@@ -156,6 +160,8 @@ export class Simulation {
       if (!this.state.milestones) this.state.milestones = []
       if (!this.state.walk || this.state.walk.length !== n) this.state.walk = new Array<number>(n).fill(0)
       if (!this.state.nextEventAt) this.state.nextEventAt = seedOrState.tick + 1500
+      if (this.state.worldVersion == null) this.state.worldVersion = 0
+      for (const site of this.state.sites) if (!site.type) site.type = 'house'
       this.rng = createRng(0)
       this.rng.setState(seedOrState.rngState)
     }
@@ -233,6 +239,7 @@ export class Simulation {
 
     // 建设、再生、出生（阶段 C 经济闭环）
     this.maybeCreateSite()
+    this.maybeCreateFarmSite()
     this.regen()
     this.maybeBirth()
 
@@ -706,7 +713,7 @@ export class Simulation {
     s.stock.stone -= PARAMS.houseStone
     s.consumed.wood += PARAMS.houseWood
     s.consumed.stone += PARAMS.houseStone
-    s.sites.push({ id: s.nextId++, x: spot.x, y: spot.y, progress: 0, builderId: null })
+    s.sites.push({ id: s.nextId++, x: spot.x, y: spot.y, progress: 0, builderId: null, type: 'house' })
   }
 
   /** 由内向外环搜一块未被占用的草地（中央广场保留不建） */
@@ -775,10 +782,45 @@ export class Simulation {
     site.progress += PARAMS.buildPerTick
     if (site.progress >= 1) {
       s.sites = s.sites.filter((x) => x.id !== site.id)
-      s.buildings.push({ id: site.id, x: site.x, y: site.y })
+      if (site.type === 'farm') {
+        this.completeFarm(site.x, site.y)
+      } else {
+        s.buildings.push({ id: site.id, x: site.x, y: site.y })
+      }
       v.task = 'idle'
       v.work = 0
       v.pathGoal = null
+    }
+  }
+
+  /** 木材富余且农田未满时，立一块开垦工地（一次只立一块，居民施工后落成） */
+  private maybeCreateFarmSite(): void {
+    const s = this.state
+    if (s.sites.some((x) => x.type === 'farm')) return
+    let farms = 0
+    for (const t of s.world.tiles) if (t.terrain === FARMLAND) farms++
+    if (farms >= PARAMS.farmCap) return
+    if (s.stock.wood < PARAMS.farmAutoWood) return
+    const spot = this.findBuildSpot()
+    if (!spot) return
+    s.stock.wood -= PARAMS.farmWoodCost
+    s.consumed.wood += PARAMS.farmWoodCost
+    s.sites.push({ id: s.nextId++, x: spot.x, y: spot.y, progress: 0, builderId: null, type: 'farm' })
+  }
+
+  /** 农田落成：格子转为农田并记里程碑（手动/自动共用），地形变更计数 +1 */
+  private completeFarm(x: number, y: number): void {
+    const s = this.state
+    const tile = s.world.tiles[y * s.world.size + x]
+    if (tile.terrain === GRASS) {
+      tile.terrain = FARMLAND
+      tile.max = PARAMS.farmMax
+      if (tile.resource > tile.max) tile.resource = tile.max
+    }
+    s.worldVersion++
+    if (!s.milestones.includes('first_farm')) {
+      s.milestones.push('first_farm')
+      this.log('milestone', '第一块农田开垦，刀耕火种')
     }
   }
 
@@ -840,18 +882,12 @@ export class Simulation {
     const cx = w.size / 2
     const cy = w.size / 2
     if (Math.abs(x + 0.5 - cx) <= 2.4 && Math.abs(y + 0.5 - cy) <= 2.4) return false
+    if (s.sites.some((si) => si.x === x && si.y === y)) return false
     if (s.stock.wood < PARAMS.farmWoodCost) return false
 
     s.stock.wood -= PARAMS.farmWoodCost
     s.consumed.wood += PARAMS.farmWoodCost
-    tile.terrain = FARMLAND
-    tile.max = PARAMS.farmMax
-    if (tile.resource > tile.max) tile.resource = tile.max
-
-    if (!s.milestones.includes('first_farm')) {
-      s.milestones.push('first_farm')
-      this.log('milestone', '第一块农田开垦，刀耕火种')
-    }
+    this.completeFarm(x, y)
     return true
   }
 }

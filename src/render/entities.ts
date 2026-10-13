@@ -1,3 +1,4 @@
+import { BUILDINGS, PROFESSION_LABEL, seasonAt } from '../sim/survival'
 import type { SimState, Villager } from '../sim/types'
 import { TILE, worldToScreen, type Camera } from './camera'
 import type { View } from './draw'
@@ -56,7 +57,14 @@ function drawVillager(ctx: CanvasRenderingContext2D, v: Villager, timeMs: number
     // 躺下休息：横向身体 + 浮动的 z
     ctx.fillStyle = PANTS
     ctx.fillRect(-4, 1, 7, 3)
-    ctx.fillStyle = `hsl(${v.hue}, 45%, 50%)`
+    ctx.fillStyle =
+      v.profession === 'farmer'
+        ? '#8db35d'
+        : v.profession === 'builder'
+          ? '#dfac45'
+          : v.profession === 'gatherer'
+            ? '#8aafb6'
+            : `hsl(${v.hue}, 45%, 50%)`
     ctx.fillRect(-4, -2, 7, 3)
     ctx.fillStyle = SKIN
     ctx.fillRect(3, -2, 3, 3)
@@ -83,7 +91,14 @@ function drawVillager(ctx: CanvasRenderingContext2D, v: Villager, timeMs: number
   }
 
   // 身体
-  ctx.fillStyle = `hsl(${v.hue}, 45%, 50%)`
+  ctx.fillStyle =
+    v.profession === 'farmer'
+      ? '#8db35d'
+      : v.profession === 'builder'
+        ? '#dfac45'
+        : v.profession === 'gatherer'
+          ? '#8aafb6'
+          : `hsl(${v.hue}, 45%, 50%)`
   ctx.fillRect(-3, -2 - bob, 6, 5)
 
   // 手臂（进食时抬起；建设时挥锤）
@@ -143,7 +158,13 @@ function drawHouse(ctx: CanvasRenderingContext2D, x: number, y: number): void {
   ctx.fillRect(px, py + 5, 16, 1)
 }
 
-function drawSite(ctx: CanvasRenderingContext2D, x: number, y: number, progress: number, timeMs: number): void {
+function drawSite(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  progress: number,
+  timeMs: number,
+): void {
   const px = x * TILE
   const py = y * TILE
   // 地基木板
@@ -222,7 +243,7 @@ function drawLabels(
     const v = state.villagers.find((x) => x.id === selection.id && x.alive)
     if (v) {
       const s = worldToScreen(cam, view.w, view.h, v.x, v.y - 0.75)
-      const label = `${v.name} · ${Math.floor(v.age)}岁`
+      const label = `${v.name} · ${v.profession ? PROFESSION_LABEL[v.profession] : `${Math.floor(v.age)}岁`}`
       ctx.fillStyle = 'rgba(10, 13, 9, 0.85)'
       const w = ctx.measureText(label).width + 10
       ctx.fillRect(s.x - w / 2, s.y - 16, w, 16)
@@ -232,8 +253,9 @@ function drawLabels(
   } else {
     const s = worldToScreen(cam, view.w, view.h, selection.x + 0.5, selection.y + 0.5)
     const t = state.world.tiles[selection.y * state.world.size + selection.x]
-    const names = ['草地 · 食物', '森林 · 木材', '水域', '石地 · 石头']
-    const label = `(${selection.x}, ${selection.y}) ${names[t.terrain]}`
+    const names = ['草地 · 食物', '森林 · 木材', '水域', '石地 · 石头', '农田 · 食物']
+    const building = state.buildings.find((b) => b.x === selection.x && b.y === selection.y)
+    const label = `(${selection.x}, ${selection.y}) ${building ? BUILDINGS[building.type ?? 'house'].name : names[t.terrain]}`
     ctx.fillStyle = 'rgba(10, 13, 9, 0.85)'
     const w = ctx.measureText(label).width + 10
     ctx.fillRect(s.x - w / 2, s.y - 16, w, 16)
@@ -269,9 +291,45 @@ export function drawEntities(
   timeMs: number,
   selection: Selection,
 ): void {
+  if (state.campaign) {
+    const season = seasonAt(state.tick)
+    const tint = [
+      'rgba(135,175,65,.05)',
+      'rgba(220,197,80,.05)',
+      'rgba(202,132,63,.12)',
+      'rgba(196,222,237,.25)',
+    ][season]
+    ctx.fillStyle = tint
+    ctx.fillRect(0, 0, state.world.size * TILE, state.world.size * TILE)
+    if (season === 3) {
+      ctx.fillStyle = '#ecf2eab0'
+      for (let i = 0; i < 75; i++) {
+        const x = (i * 137 + timeMs * 0.008) % (state.world.size * TILE)
+        const y = (i * 73 + timeMs * 0.012) % (state.world.size * TILE)
+        ctx.fillRect(x, y, 1.5, 1.5)
+      }
+    }
+  }
   drawRoads(ctx, state)
   drawStockpile(ctx, state)
-  for (const b of state.buildings) drawHouse(ctx, b.x, b.y)
+  for (const b of state.buildings) {
+    drawHouse(ctx, b.x, b.y)
+    // 不同建筑用屋顶色与门口物件区分。
+    if (b.type === 'granary' || b.type === 'farmhouse') {
+      const px = b.x * TILE,
+        py = b.y * TILE
+      ctx.fillStyle = b.type === 'granary' ? '#dfac45' : '#709b52'
+      ctx.fillRect(px + 1, py - 3, 14, 3)
+      if (b.type === 'granary') {
+        ctx.fillStyle = '#d7be80'
+        ctx.fillRect(px + 10, py + 9, 4, 4)
+      } else {
+        ctx.fillStyle = '#9aca68'
+        ctx.fillRect(px + 1, py + 9, 2, 5)
+        ctx.fillRect(px + 4, py + 9, 2, 5)
+      }
+    }
+  }
   for (const s of state.sites) drawSite(ctx, s.x, s.y, s.progress, timeMs)
   for (const v of state.villagers) {
     if (!v.alive) drawGrave(ctx, v)

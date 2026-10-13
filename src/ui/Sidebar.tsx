@@ -1,3 +1,5 @@
+import SurvivalPanel from './SurvivalPanel'
+import { PROFESSION_LABEL, type Profession, type BuildingKind, type SurvivalView } from '../sim/survival'
 import { useState } from 'react'
 import type { HistoryPoint, JournalEntry, Stock, TaskKind } from '../sim/types'
 import type { ResourceType, Terrain } from '../sim/world'
@@ -6,6 +8,7 @@ import type { Selection } from '../render/entities'
 import StatsChart, { SERIES } from './StatsChart'
 
 export interface SelectedVillagerInfo {
+  profession?: Profession
   id: number
   name: string
   age: number
@@ -26,6 +29,8 @@ export interface SelectedTileInfo {
 }
 
 export interface UiSnapshot {
+  campaign: SurvivalView | null
+  blocked: boolean
   tick: number
   paused: boolean
   speed: number
@@ -54,7 +59,7 @@ export const TASK_LABEL: Record<TaskKind, string> = {
   build: '建设',
 }
 
-const TERRAIN_LABEL = ['草地', '森林', '水域', '石地']
+const TERRAIN_LABEL = ['草地', '森林', '水域', '石地', '农田']
 const RESOURCE_LABEL: Record<ResourceType, string> = { food: '食物', wood: '木材', stone: '石头' }
 
 function fmt(n: number): string {
@@ -74,7 +79,9 @@ interface Props {
   selection: Selection
   onTogglePause: () => void
   onSpeed: (n: number) => void
-  onReset: (seedText: string) => void
+  onReset: (seedText: string, mode?: 'survival' | 'sandbox') => void
+  onWorkforce: (farmers: number, builders: number) => void
+  onBuild: (kind: BuildingKind) => void
   onGrant: (type: ResourceType) => void
   onClearSelection: () => void
   onSave: () => void
@@ -95,6 +102,8 @@ export default function Sidebar({
   onLoad,
   saveMsg,
   onReclaim,
+  onWorkforce,
+  onBuild,
 }: Props) {
   const [seedText, setSeedText] = useState('')
   const day = Math.floor(ui.tick / 60) + 1
@@ -102,17 +111,25 @@ export default function Sidebar({
   const popWarn = ui.pop >= ui.capacity
 
   const foodStatus =
-    ui.stock.food < 20 ? <em className="status danger">告急</em> : ui.stock.food < 60 ? <em className="status warn">偏紧</em> : <em className="status ok">充足</em>
-  const woodStatus = ui.stock.wood < 30 ? <em className="status warn">待建</em> : <em className="status ok">充足</em>
-  const stoneStatus = ui.stock.stone < 15 ? <em className="status warn">待建</em> : <em className="status ok">充足</em>
+    ui.stock.food < 20 ? (
+      <em className="status danger">告急</em>
+    ) : ui.stock.food < 60 ? (
+      <em className="status warn">偏紧</em>
+    ) : (
+      <em className="status ok">充足</em>
+    )
+  const woodStatus =
+    ui.stock.wood < 30 ? <em className="status warn">待建</em> : <em className="status ok">充足</em>
+  const stoneStatus =
+    ui.stock.stone < 15 ? <em className="status warn">待建</em> : <em className="status ok">充足</em>
 
   return (
     <aside className="sidebar">
       {/* 控制 */}
       <section className="panel">
         <div className="control-row">
-          <button className="btn btn-primary" onClick={onTogglePause}>
-            {ui.paused ? '▶ 开始' : '⏸ 暂停'}
+          <button className="btn btn-primary" disabled={ui.blocked} onClick={onTogglePause}>
+            {ui.blocked ? '等待决策 / 结算' : ui.paused ? '▶ 开始' : '⏸ 暂停'}
           </button>
           <div className="segmented" role="group" aria-label="模拟速度">
             {[1, 2, 5, 10, 20].map((n) => (
@@ -129,11 +146,11 @@ export default function Sidebar({
             value={seedText}
             onChange={(e) => setSeedText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') onReset(seedText)
+              if (e.key === 'Enter') onReset(seedText, ui.campaign ? 'survival' : 'sandbox')
             }}
           />
-          <button className="btn" onClick={() => onReset(seedText)}>
-            重置世界
+          <button className="btn" onClick={() => onReset(seedText, ui.campaign ? 'survival' : 'sandbox')}>
+            重新开始
           </button>
         </div>
         <div className="seed-row">
@@ -147,6 +164,19 @@ export default function Sidebar({
         </div>
       </section>
 
+      <section className="panel mode-panel">
+        <button className="btn" onClick={() => onReset(seedText, ui.campaign ? 'sandbox' : 'survival')}>
+          {ui.campaign ? '新建自由沙盒' : '新建首年生存挑战'}
+        </button>
+        <p className="hint">
+          {ui.campaign
+            ? '保存后再切换模式，避免覆盖当前进度。'
+            : '当前是自由沙盒。首年挑战加入季节、分工和决策。'}
+        </p>
+      </section>
+      {ui.campaign && (
+        <SurvivalPanel c={ui.campaign} blocked={ui.blocked} onWorkforce={onWorkforce} onBuild={onBuild} />
+      )}
       {/* 时间与人口 */}
       <section className="panel">
         <h2 className="panel-title">时间与人口</h2>
@@ -164,7 +194,7 @@ export default function Sidebar({
           <div className="stat">
             <span className="stat-label">住房</span>
             <span className="stat-value">
-              {ui.buildings} 座{ui.sites > 0 ? ` · ${ui.sites} 在建` : ''}
+              {ui.campaign ? ui.campaign.houses : ui.buildings} 座{ui.sites > 0 ? ` · ${ui.sites} 在建` : ''}
             </span>
           </div>
           <div className="stat">
@@ -182,9 +212,17 @@ export default function Sidebar({
         <div className="res-row">
           <i className="swatch" style={{ background: SERIES[1].color }} />
           <span className="res-name">食物</span>
-          <span className="res-value">{fmt(ui.stock.food)}</span>
+          <span className="res-value">
+            {fmt(ui.stock.food)}
+            {ui.campaign ? ` / ${ui.campaign.foodCapacity}` : ''}
+          </span>
           {foodStatus}
-          <button className="btn-mini" onClick={() => onGrant('food')} title="补充 50 食物">
+          <button
+            disabled={ui.blocked}
+            className="btn-mini"
+            onClick={() => onGrant('food')}
+            title="补充 50 食物"
+          >
             +50
           </button>
         </div>
@@ -193,7 +231,12 @@ export default function Sidebar({
           <span className="res-name">木材</span>
           <span className="res-value">{fmt(ui.stock.wood)}</span>
           {woodStatus}
-          <button className="btn-mini" onClick={() => onGrant('wood')} title="补充 50 木材">
+          <button
+            disabled={ui.blocked}
+            className="btn-mini"
+            onClick={() => onGrant('wood')}
+            title="补充 50 木材"
+          >
             +50
           </button>
         </div>
@@ -202,12 +245,18 @@ export default function Sidebar({
           <span className="res-name">石头</span>
           <span className="res-value">{fmt(ui.stock.stone)}</span>
           {stoneStatus}
-          <button className="btn-mini" onClick={() => onGrant('stone')} title="补充 50 石头">
+          <button
+            disabled={ui.blocked}
+            className="btn-mini"
+            onClick={() => onGrant('stone')}
+            title="补充 50 石头"
+          >
             +50
           </button>
         </div>
       </section>
 
+      {ui.campaign && <p className="hint supply-hint">+50 为辅助补给，使用后本局会标记为辅助局。</p>}
       {/* 统计曲线 */}
       <section className="panel">
         <h2 className="panel-title">历史曲线</h2>
@@ -227,7 +276,7 @@ export default function Sidebar({
       <section className="panel">
         <h2 className="panel-title">纪事</h2>
         {ui.journal.length === 0 ? (
-          <p className="hint">尚无大事发生。第一座房屋、第 100 天、旅人来访……都会记在这里。</p>
+          <p className="hint">尚无大事发生。第一座房屋、季节更替、重要决策……都会记在这里。</p>
         ) : (
           <ul className="journal-list">
             {ui.journal.slice(0, 8).map((e, i) => (
@@ -256,6 +305,16 @@ export default function Sidebar({
             <div className="detail-head">
               <span className="v-name">{ui.villager.name}</span>
               <span className="v-task">{ui.villager.alive ? TASK_LABEL[ui.villager.task] : '已故'}</span>
+            </div>
+            <div className="detail-row">
+              <span>职业</span>
+              <span>
+                {ui.villager.age < 12
+                  ? '幼儿'
+                  : ui.villager.profession
+                    ? PROFESSION_LABEL[ui.villager.profession]
+                    : '自由分工'}
+              </span>
             </div>
             <div className="detail-row">
               <span>年龄</span>
@@ -294,19 +353,23 @@ export default function Sidebar({
             </div>
             <div className="detail-row">
               <span>地表资源</span>
-              <span>
-                {ui.tile.max > 0 ? `${Math.floor(ui.tile.resource)} / ${ui.tile.max}` : '无'}
-              </span>
+              <span>{ui.tile.max > 0 ? `${Math.floor(ui.tile.resource)} / ${ui.tile.max}` : '无'}</span>
             </div>
-            {ui.tile.max > 0 && <div className="detail-row">{bar((ui.tile.resource / ui.tile.max) * 100, '#7fae4e')}</div>}
+            {ui.tile.max > 0 && (
+              <div className="detail-row">{bar((ui.tile.resource / ui.tile.max) * 100, '#7fae4e')}</div>
+            )}
             {ui.tile.terrain === GRASS && (
               <button
                 className="btn farm-btn"
-                disabled={ui.stock.wood < 5}
+                disabled={ui.blocked || ui.stock.wood < 5}
                 onClick={onReclaim}
                 title="农田再生速度是草地的 3 倍，上限 60"
               >
-                {ui.stock.wood >= 5 ? '开垦为农田（木材 −5）' : '开垦需 5 木材'}
+                {ui.stock.wood >= 5
+                  ? ui.campaign
+                    ? '安排开垦（木材 −5，需建筑工）'
+                    : '开垦为农田（木材 −5）'
+                  : '开垦需 5 木材'}
               </button>
             )}
             {ui.tile.terrain === 4 && (
@@ -317,7 +380,7 @@ export default function Sidebar({
             )}
           </div>
         ) : (
-          <p className="hint">点击地图上的居民或格子查看详情；拖动平移、滚轮缩放。</p>
+          <p className="hint">点击地图上的居民或格子查看详情；拖动平移、双指或滚轮缩放。</p>
         )}
       </section>
     </aside>

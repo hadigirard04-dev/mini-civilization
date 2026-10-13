@@ -207,7 +207,9 @@ body {
   font-size: 13px;
   font-family: inherit;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
 }
 
 .btn:hover {
@@ -626,5 +628,390 @@ li.milestone .j-text {
 
   .topbar-hint {
     display: none;
+  }
+}
+
+/* 首年生存 */
+.sidebar {
+  width: 348px;
+}
+button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+}
+.chapter-label {
+  color: var(--amber);
+  font-size: 10px;
+  letter-spacing: 0.13em;
+}
+.chapter-title {
+  font-size: 20px;
+  margin: 8px 0;
+  color: var(--ink);
+}
+.campaign-panel {
+  background: linear-gradient(140deg, #242d1b, var(--panel));
+}
+.campaign-panel.season-3 {
+  background: linear-gradient(140deg, #1b2a35, var(--panel));
+}
+.season-track {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 16px 0 8px;
+}
+.season-track span {
+  border-bottom: 3px solid var(--line);
+  text-align: center;
+  padding: 4px;
+  color: var(--ink-faint);
+}
+.season-track .current {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+.season-3 .season-track .current {
+  color: #a7cddd;
+  border-color: #a7cddd;
+}
+.season-caption {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  gap: 8px;
+}
+.season-caption span {
+  color: var(--ink-dim);
+}
+.reserve-box {
+  padding: 12px;
+  margin: 12px 0;
+  border: 1px solid #3a4230;
+  background: #0e140dd9;
+  border-radius: 6px;
+}
+.reserve-box > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.reserve-box > div > span {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.reserve-box b {
+  font-size: 30px;
+  font-variant-numeric: tabular-nums;
+}
+.reserve-box small {
+  font-size: 12px;
+  color: var(--ink-dim);
+  font-weight: normal;
+}
+.reserve-box progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--amber);
+}
+.reserve-box p {
+  margin: 5px 0 0;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.section-meta {
+  float: right;
+  letter-spacing: 0;
+  color: var(--ink-dim);
+  font-size: 10px;
+}
+.worker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 0;
+  gap: 8px;
+}
+.worker-row b {
+  font-size: 13px;
+}
+.worker-row small {
+  display: block;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.farmers b {
+  color: #9aba6b;
+}
+.builders b {
+  color: var(--amber);
+}
+.gatherers b {
+  color: #aac1c9;
+}
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.stepper button {
+  width: 38px;
+  height: 38px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 20px;
+  border-radius: 6px;
+}
+.stepper output {
+  width: 23px;
+  text-align: center;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.gatherers > output {
+  margin-right: 46px;
+  font-size: 16px;
+}
+.building-counts {
+  font-size: 12px;
+  color: var(--ink-dim);
+  margin-bottom: 10px;
+}
+.build-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.build-card {
+  text-align: left;
+  padding: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  font-family: inherit;
+  cursor: pointer;
+  min-height: 107px;
+}
+.build-card b {
+  display: block;
+  font-size: 14px;
+  color: var(--amber);
+  margin-bottom: 4px;
+}
+.build-card span {
+  display: block;
+  font-size: 11px;
+  min-height: 33px;
+  color: var(--ink-dim);
+}
+.build-card small {
+  font-size: 11px;
+  color: #c8bda2;
+}
+.build-card:hover:not(:disabled) {
+  border-color: var(--amber);
+}
+.site-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin: 7px 0;
+  color: var(--ink-dim);
+}
+.danger-text {
+  color: var(--danger);
+  font-size: 12px;
+}
+.assist-tag {
+  color: var(--amber);
+  font-size: 11px;
+}
+.supply-hint {
+  padding: 6px 16px;
+}
+.mode-panel {
+  padding-top: 0;
+}
+.mode-panel .btn {
+  width: 100%;
+  margin-bottom: 6px;
+}
+.stage-season {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  padding: 9px 13px;
+  background: #0e120de0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--amber);
+  pointer-events: none;
+}
+.stage-season span {
+  display: block;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.stage-season.season-3 {
+  color: #a7cddd;
+}
+.campaign-dialog {
+  width: min(480px, calc(100vw - 28px));
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  background: #171d14;
+  color: var(--ink);
+  border: 1px solid #58623f;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 20px 80px #0009;
+}
+.campaign-dialog::backdrop {
+  background: #050b08b8;
+  backdrop-filter: blur(4px);
+}
+.campaign-dialog h2 {
+  font-size: 23px;
+  margin: 9px 0 14px;
+}
+.campaign-dialog p {
+  color: var(--ink-dim);
+  font-size: 13px;
+}
+.decision-stats {
+  font-size: 12px;
+  color: var(--amber);
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.decision-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 16px;
+}
+.decision-option {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 100%;
+  text-align: left;
+  padding: 14px;
+  background: var(--panel-2);
+  color: var(--ink);
+  border: 1px solid #3e4931;
+  border-radius: 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.decision-option:hover:not(:disabled) {
+  border-color: var(--amber);
+}
+.decision-option b {
+  color: var(--amber);
+}
+.decision-option span {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.decision-option small {
+  color: var(--danger);
+}
+.result-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 16px;
+  background: var(--bg-deep);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.result-grid b {
+  display: block;
+  font-size: 25px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.decision-history {
+  font-size: 12px;
+  padding-left: 18px;
+  color: var(--ink-dim);
+}
+.decision-history li {
+  margin-bottom: 7px;
+}
+.result-actions {
+  display: flex;
+  gap: 8px;
+}
+.result-actions button {
+  flex: 1;
+  height: 44px;
+}
+.seed-row {
+  flex-wrap: wrap;
+}
+.seed-row .save-msg {
+  width: 100%;
+  white-space: normal;
+}
+@media (max-width: 860px) {
+  .sidebar {
+    width: 100%;
+  }
+  .stage {
+    height: 44vh;
+    min-height: 280px;
+    flex: none;
+  }
+  .topbar {
+    padding: 0 12px;
+    gap: 8px;
+  }
+  .brand {
+    font-size: 14px;
+    gap: 5px;
+  }
+  .brand-sub {
+    font-size: 9px;
+    letter-spacing: 0.04em;
+  }
+  .seed-tag {
+    font-size: 10px;
+    padding: 2px 5px;
+  }
+  .btn,
+  .seg,
+  .btn-mini,
+  .stepper button,
+  .seed-input {
+    min-height: 44px;
+  }
+  .stepper button {
+    width: 44px;
+  }
+  .gatherers > output {
+    margin-right: 49px;
+  }
+  .btn-x {
+    min-width: 44px;
+    min-height: 44px;
+    top: -12px;
+  }
+  .build-card {
+    min-height: 110px;
+  }
+  .campaign-dialog {
+    padding: 20px;
   }
 }

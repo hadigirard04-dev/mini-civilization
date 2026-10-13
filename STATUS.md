@@ -1,9 +1,10 @@
-# STATUS
+# 项目状态
 
-- 状态：**完成**（阶段 A–E + 食物平衡 + 10×/20× + 纪事与足迹 + **农田开垦**；push 即自动上线）
-- 测试：36/36 通过（10 文件，含压力、平衡、纪事、农田回归）
-- 构建：`npm run build` 通过；`npm audit` 0 漏洞
-- **线上网址**：https://hadigirard04-dev.github.io/mini-civilization/ （push master 自动部署）
-- 仓库：https://github.com/hadigirard04-dev/mini-civilization
-- 本地预览：`npm run dev`；交付文档见 README.md / docs/log.md / PLAN.md；截图在 output/design/mini-civilization/
-- 更新时间：2026-10-10
+- 项目：微型文明 · Mini Civilization
+- 版本：v0.2 首年生存
+- 阶段：v0.2 已完成
+- 本轮目标：从自动资源循环增加为可决策的首年生存游戏
+- 已实现：四季、冬季压力、成人职业分工、粮仓 / 农舍 / 住房 / 农田、三次决策事件、首年结算、自动与手动独立存档、手机双指缩放
+- 兼容：自由沙盒与 v1 存档
+- 下一步：收集实际游玩的难度与分工反馈；先调整参数，不扩科技 / 战争范围
+- 验收：全年对照模拟、存档确定性恢复、事件冻结与成本校验、类型检查、构建、旧测试回归；13 个测试文件 / 52 项测试通过；390px 与 1440px 浏览器无脚本错误

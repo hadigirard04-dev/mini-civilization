@@ -1,4 +1,5 @@
 import type { ResourceType, World } from './world'
+import type { CampaignState, BuildingKind, Profession } from './survival'
 
 export interface Point {
   x: number
@@ -9,6 +10,7 @@ export interface Point {
 export type TaskKind = 'idle' | 'wander' | 'eat' | 'rest' | 'deposit' | 'gather' | 'build'
 
 export interface Villager {
+  profession?: Profession
   id: number
   name: string
   /** 连续坐标（格为单位，0.5 为格中心） */
@@ -62,10 +64,11 @@ export interface BuildSite {
   progress: number
   builderId: number | null
   /** 工地类型：住房或农田（旧存档缺省视为住房） */
-  type?: 'house' | 'farm'
+  type?: BuildingKind
 }
 
 export interface Building {
+  type?: Exclude<BuildingKind, 'farm'>
   id: number
   x: number
   y: number
@@ -94,6 +97,8 @@ export interface JournalEntry {
 
 /** 全部可序列化的模拟状态（存档 = 直接 JSON 化本结构） */
 export interface SimState {
+  /** null 为旧版沙盒；首年挑战独立保存，旧存档不会强行切换玩法。 */
+  campaign: CampaignState | null
   tick: number
   world: World
   villagers: Villager[]

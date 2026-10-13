@@ -1,9 +1,11 @@
+import { buildingCount, survivalView, SEASONS, type BuildingKind } from './sim/survival'
+import { CampaignDialog } from './ui/SurvivalPanel'
 import { useEffect, useRef, useState } from 'react'
 import { clampCamera, screenToWorld, TILE, type Camera } from './render/camera'
 import { render, type View } from './render/draw'
 import { drawEntities, type Selection } from './render/entities'
 import { buildTerrainCanvas } from './render/terrain'
-import { loadFrom, saveTo } from './sim/save'
+import { AUTO_SAVE_KEY, loadFrom, saveTo } from './sim/save'
 import { Simulation } from './sim/simulation'
 import type { ResourceType } from './sim/world'
 import { getTile } from './sim/world'
@@ -23,6 +25,7 @@ function makeSnapshot(sim: Simulation, selection: Selection): UiSnapshot {
     const v = s.villagers.find((x) => x.id === selection.id)
     if (v) {
       villager = {
+        profession: v.profession,
         id: v.id,
         name: v.name,
         age: v.age,
@@ -39,13 +42,15 @@ function makeSnapshot(sim: Simulation, selection: Selection): UiSnapshot {
     if (t) tile = { x: selection.x, y: selection.y, terrain: t.terrain, resource: t.resource, max: t.max }
   }
   return {
+    campaign: survivalView(s),
+    blocked: sim.blocked,
     tick: s.tick,
     paused: sim.paused,
     speed: sim.speed,
     seed: s.world.seed,
     pop,
     capacity: sim.capacity,
-    buildings: s.buildings.length,
+    buildings: buildingCount(s, 'house'),
     sites: s.sites.length,
     births: s.births,
     deaths: s.deaths,
@@ -67,20 +72,24 @@ export default function App() {
     // 启动时优先恢复本地存档
     let loaded: Simulation | null = null
     try {
-      loaded = loadFrom(window.localStorage)
+      loaded = loadFrom(window.localStorage, AUTO_SAVE_KEY) ?? loadFrom(window.localStorage)
     } catch {
       loaded = null
     }
-    simRef.current = loaded ?? new Simulation(randomSeed())
-  }
-  if (import.meta.env.DEV) {
-    ;(window as unknown as Record<string, unknown>).__miniCiv = { simRef }
+    const fresh = new Simulation(randomSeed(), 'survival')
+    fresh.paused = true
+    fresh.speed = 2
+    simRef.current = loaded ?? fresh
   }
   const camRef = useRef<Camera>({ x: 32, y: 32, zoom: 1.5 })
   const viewRef = useRef<View>({ w: 0, h: 0, dpr: 1 })
   const terrainRef = useRef<HTMLCanvasElement | null>(null)
   const selectionRef = useRef<Selection>(null)
   const worldVersionRef = useRef(0)
+
+  if (import.meta.env.DEV) {
+    ;(window as unknown as Record<string, unknown>).__miniCiv = { simRef, camRef, selectionRef }
+  }
 
   const [epoch, setEpoch] = useState(0)
   const [selection, setSelection] = useState<Selection>(null)
@@ -157,15 +166,36 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [])
 
+  useEffect(() => {
+    const persist = () => {
+      try {
+        saveTo(simRef.current!, window.localStorage, AUTO_SAVE_KEY)
+      } catch {
+        setSaveMsg('自动保存失败，请检查浏览器存储空间')
+      }
+    }
+    const timer = window.setInterval(persist, 5000)
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') persist()
+    }
+    document.addEventListener('visibilitychange', onHidden)
+    window.addEventListener('pagehide', persist)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onHidden)
+      window.removeEventListener('pagehide', persist)
+    }
+  }, [])
+
   // 空格 = 开始/暂停
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      if (target && ['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT'].includes(target.tagName)) return
       if (e.code === 'Space') {
         e.preventDefault()
         const sim = simRef.current
-        if (sim) {
+        if (sim && !sim.blocked) {
           sim.paused = !sim.paused
           setUi((prev) => ({ ...prev, paused: sim.paused }))
         }
@@ -182,8 +212,7 @@ export default function App() {
     let dragging = false
     let lastX = 0
     let lastY = 0
-    let downX = 0
-    let downY = 0
+    const pointers = new Map<number, { x: number; y: number }>()
     let downT = 0
     let moved = 0
 
@@ -226,14 +255,36 @@ export default function App() {
     }
 
     const onDown = (e: PointerEvent) => {
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
       dragging = true
-      moved = 0
-      lastX = downX = e.clientX
-      lastY = downY = e.clientY
+      moved = pointers.size > 1 ? 999 : 0
+      lastX = e.clientX
+      lastY = e.clientY
       downT = Date.now()
       canvas.setPointerCapture(e.pointerId)
     }
     const onMove = (e: PointerEvent) => {
+      if (pointers.size >= 2 && pointers.has(e.pointerId)) {
+        const beforePair = [...pointers.values()].slice(0, 2)
+        const distance = (p: typeof beforePair) => Math.hypot(p[1].x - p[0].x, p[1].y - p[0].y)
+        const mid = (p: typeof beforePair) => ({ x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 })
+        const before = toWorld(mid(beforePair).x, mid(beforePair).y)
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+        const pair = [...pointers.values()].slice(0, 2)
+        const ratio = distance(beforePair) > 1 ? distance(pair) / distance(beforePair) : 1
+        const cam = camRef.current
+        cam.zoom = Math.min(6, Math.max(0.4, cam.zoom * ratio))
+        const rect = canvas.getBoundingClientRect()
+        const center = mid(pair),
+          view = viewRef.current,
+          sps = TILE * cam.zoom
+        cam.x = before.x - (center.x - rect.left - view.w / 2) / sps
+        cam.y = before.y - (center.y - rect.top - view.h / 2) / sps
+        clampCamera(cam, simRef.current!.state.world.size, view.w, view.h)
+        moved = 999
+        return
+      }
+      if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
       if (!dragging) {
         canvas.style.cursor = pickVillager(e.clientX, e.clientY) ? 'pointer' : 'grab'
         return
@@ -250,10 +301,23 @@ export default function App() {
       clampCamera(cam, simRef.current!.state.world.size, viewRef.current.w, viewRef.current.h)
     }
     const onUp = (e: PointerEvent) => {
-      if (dragging && moved < 6 && Date.now() - downT < 600 && downX === e.clientX && downY === e.clientY) {
+      if (
+        e.type !== 'pointercancel' &&
+        pointers.size === 1 &&
+        dragging &&
+        moved < 8 &&
+        Date.now() - downT < 600
+      ) {
         pick(e.clientX, e.clientY)
       }
-      dragging = false
+      pointers.delete(e.pointerId)
+      dragging = pointers.size > 0
+      const remaining = [...pointers.values()][0]
+      if (remaining) {
+        lastX = remaining.x
+        lastY = remaining.y
+        moved = 999
+      }
     }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
@@ -287,6 +351,7 @@ export default function App() {
   // 控制回调
   const togglePause = () => {
     const sim = simRef.current!
+    if (sim.blocked) return
     sim.paused = !sim.paused
     setUi((prev) => ({ ...prev, paused: sim.paused }))
   }
@@ -295,17 +360,23 @@ export default function App() {
     sim.speed = n
     setUi((prev) => ({ ...prev, speed: n }))
   }
-  const resetWorld = (seedText: string) => {
+  const resetWorld = (seedText: string, mode: 'survival' | 'sandbox' = 'survival') => {
     const parsed = Number.parseInt(seedText.trim(), 10)
     const seed = Number.isFinite(parsed) ? parsed : randomSeed()
     const prev = simRef.current!
-    const next = new Simulation(seed)
+    const next = new Simulation(seed, mode)
+    next.paused = mode === 'survival'
     next.speed = prev.speed
     simRef.current = next
     const half = next.state.world.size / 2
     camRef.current = { x: half, y: half, zoom: camRef.current.zoom }
     setSelection(null)
     setEpoch((e) => e + 1)
+    try {
+      saveTo(next, window.localStorage, AUTO_SAVE_KEY)
+    } catch {
+      setSaveMsg('自动保存失败')
+    }
   }
   const grant = (type: ResourceType) => {
     const sim = simRef.current!
@@ -320,6 +391,7 @@ export default function App() {
   const doSave = () => {
     try {
       saveTo(simRef.current!, window.localStorage)
+      saveTo(simRef.current!, window.localStorage, AUTO_SAVE_KEY)
       flashMsg('已保存 ✓')
     } catch {
       flashMsg('保存失败')
@@ -335,6 +407,7 @@ export default function App() {
       simRef.current = loaded
       setSelection(null)
       setEpoch((e) => e + 1)
+      saveTo(loaded, window.localStorage, AUTO_SAVE_KEY)
       flashMsg('已读取 ✓')
     } catch {
       flashMsg('读取失败')
@@ -346,10 +419,29 @@ export default function App() {
     const sim = simRef.current!
     const ok = sim.reclaimToFarmland(sel.x, sel.y)
     if (ok) {
-      flashMsg('已开垦为农田（木材 −5）')
+      flashMsg(sim.state.campaign ? '已安排开垦，等待建筑工' : '已开垦为农田（木材 −5）')
       setUi(makeSnapshot(sim, selectionRef.current))
     } else {
       flashMsg('此处无法开垦')
+    }
+  }
+
+  const changeWorkforce = (farmers: number, builders: number) => {
+    if (simRef.current!.setWorkforce(farmers, builders))
+      setUi(makeSnapshot(simRef.current!, selectionRef.current))
+  }
+  const build = (kind: BuildingKind) => {
+    if (!simRef.current!.orderBuilding(kind)) flashMsg('材料不足、工地已满或此处无可建草地')
+    setUi(makeSnapshot(simRef.current!, selectionRef.current))
+  }
+  const choose = (choice: number) => {
+    if (simRef.current!.resolveEvent(choice)) {
+      setUi(makeSnapshot(simRef.current!, selectionRef.current))
+      try {
+        saveTo(simRef.current!, window.localStorage, AUTO_SAVE_KEY)
+      } catch {
+        flashMsg('自动保存失败')
+      }
     }
   }
 
@@ -359,17 +451,27 @@ export default function App() {
         <div className="brand">
           <span className="brand-mark">▦</span>
           微型文明
-          <span className="brand-sub">Mini Civilization</span>
+          <span className="brand-sub">{ui.campaign ? 'First Winter' : 'Sandbox'}</span>
         </div>
         <div className="topbar-meta">
           <span className="seed-tag">种子 {ui.seed}</span>
-          <span className="topbar-hint">拖动平移 · 滚轮缩放 · 空格暂停</span>
+          <span className="topbar-hint">拖动平移 · 双指 / 滚轮缩放 · 空格暂停</span>
         </div>
       </header>
       <div className="main">
         <div className="stage" ref={wrapRef}>
           <canvas ref={canvasRef} />
-          {ui.paused && <div className="pause-chip">‖ 已暂停</div>}
+          {(ui.paused || ui.blocked) && (
+            <div className="pause-chip">{ui.blocked ? '等待决策' : '‖ 已暂停'}</div>
+          )}
+          {ui.campaign && (
+            <div className={`stage-season season-${ui.campaign.season}`}>
+              {SEASONS[ui.campaign.season]}季 · 第 {ui.campaign.day} 天
+              <span>
+                口粮 {Math.floor(ui.stock.food)} / {ui.campaign.foodCapacity}
+              </span>
+            </div>
+          )}
         </div>
         <Sidebar
           ui={ui}
@@ -383,8 +485,21 @@ export default function App() {
           onLoad={doLoad}
           saveMsg={saveMsg}
           onReclaim={reclaim}
+          onWorkforce={changeWorkforce}
+          onBuild={build}
         />
       </div>
+      <CampaignDialog
+        c={ui.campaign}
+        population={ui.pop}
+        capacity={ui.capacity}
+        onChoice={choose}
+        onContinue={() => {
+          simRef.current!.continueAfterYear()
+          setUi(makeSnapshot(simRef.current!, selectionRef.current))
+        }}
+        onRestart={() => resetWorld(String(ui.seed), 'survival')}
+      />
     </div>
   )
 }

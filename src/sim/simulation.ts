@@ -1,4 +1,17 @@
 import {
+  createCivilization,
+  ERAS,
+  HOUSE_CAPACITY,
+  countCivic,
+  electricGrid,
+  eraRequirements,
+  nextConstruction,
+  constructionCost,
+  constructionName,
+  CIVIC_YEAR_TICKS,
+  type ConstructionKind,
+} from './civilization'
+import {
   BUILDINGS,
   EVENTS,
   YEAR_TICKS,
@@ -13,7 +26,7 @@ import {
 } from './survival'
 import { findPath } from './path'
 import { createRng, type Rng } from './rng'
-import type { SimState, Villager } from './types'
+import type { SimState, Villager, Building } from './types'
 import {
   FARMLAND,
   FOREST,
@@ -166,8 +179,8 @@ function makeVillager(id: number, cx: number, cy: number, rng: Rng, world: World
   }
 }
 
-function createInitialState(seed: number, rng: Rng): SimState {
-  const world = generateWorld(seed)
+function createInitialState(seed: number, rng: Rng, large = false): SimState {
+  const world = generateWorld(seed, large ? 256 : 64, large)
   const cx = world.size / 2
   const cy = world.size / 2
   const villagers: Villager[] = []
@@ -176,6 +189,7 @@ function createInitialState(seed: number, rng: Rng): SimState {
   }
   return {
     tick: 0,
+    civilization: null,
     campaign: null,
     world,
     villagers,
@@ -208,12 +222,35 @@ export class Simulation {
   speed = 1
   readonly tickRate = 10
   private acc = 0
+  private populationTick = -1
+  private populationCount = 0
+  private gridRatio = 1
+  private workplacesVersion = -1
+  private workplaces: Record<'research' | 'industry' | 'mining', Building[]> = {
+    research: [],
+    industry: [],
+    mining: [],
+  }
+  private occupied = new Set<number>()
+  private occupiedVersion = -1
   private rng: Rng
 
-  constructor(seedOrState: number | SimState, mode: 'sandbox' | 'survival' = 'sandbox') {
+  constructor(seedOrState: number | SimState, mode: 'sandbox' | 'survival' | 'evolution' = 'sandbox') {
     if (typeof seedOrState === 'number') {
       this.rng = createRng(seedOrState ^ 0x5bf03635)
-      this.state = createInitialState(seedOrState, this.rng)
+      this.state = createInitialState(seedOrState, this.rng, mode === 'evolution')
+      if (mode === 'evolution') {
+        this.state.civilization = createCivilization(this.state.world.size)
+        for (const v of this.state.villagers) this.initializeDemographics(v)
+        this.state.stock = { food: 160, wood: 20, stone: 10 }
+        const mid = this.state.world.size / 2
+        this.state.buildings.push({ id: this.state.nextId++, x: mid, y: mid, type: 'campfire', level: 0 })
+        for (let i = 0; i < 2; i++) {
+          const spot = this.findBuildSpot()
+          if (spot) this.state.buildings.push({ id: this.state.nextId++, ...spot, type: 'house', level: 0 })
+        }
+        this.log('milestone', '部落在这片大陆落脚。从农田与知识开始，逐步建设现代都市。')
+      }
       if (mode === 'survival') {
         this.state.campaign = createCampaign()
         this.state.stock = { food: 140, wood: 35, stone: 20 }
@@ -222,6 +259,8 @@ export class Simulation {
       }
     } else {
       this.state = seedOrState
+      if (!this.state.civilization) this.state.civilization = null
+      else if (this.state.civilization.oreReserve === undefined) this.state.civilization.oreReserve = 60000
       if (!this.state.campaign) this.state.campaign = null
       // 旧存档缺省字段回填（向前兼容）
       const n = seedOrState.world.size * seedOrState.world.size
@@ -262,14 +301,21 @@ export class Simulation {
     if (this.blocked) return
     const s = this.state
     s.tick++
+    if (s.civilization) this.gridRatio = electricGrid(s).ratio
     const winter = !!s.campaign && seasonAt(s.tick) === 3
     if (s.campaign && s.tick % 60 === 1) this.assignWorkforce()
     const rng = this.rng
 
     for (const v of s.villagers) {
       if (!v.alive) continue
-      v.age += 1 / (s.campaign ? YEAR_TICKS : PARAMS.ageTicks)
-      v.hunger = Math.max(0, v.hunger - PARAMS.hungerDecay * (winter ? 1.4 : 1))
+      v.age += 1 / (s.campaign ? YEAR_TICKS : s.civilization ? CIVIC_YEAR_TICKS : PARAMS.ageTicks)
+      v.hunger = Math.max(
+        0,
+        v.hunger -
+          PARAMS.hungerDecay *
+            (winter ? 1.4 : 1) *
+            (s.civilization ? (v.age < 5 ? 0.4 : v.age < 18 ? 0.7 : 1) : 1),
+      )
 
       // 涓涓流进食：只在越过个人阈值时吃 1 口（自动节流），不打断任务、不丢路径。
       // 库存低于地板（6）时排队让位给采集回款；濒死（hunger<15）才破例。
@@ -293,7 +339,10 @@ export class Simulation {
       }
 
       // 死因二：年老自然衰亡
-      if (v.age >= v.maxAge && rng.next() < 1 / 400) {
+      if (
+        v.age >= v.maxAge &&
+        rng.next() < 1 / (400 * (1 + (s.civilization ? countCivic(s, 'clinic') : 0)))
+      ) {
         this.kill(v, 'age')
         continue
       }
@@ -314,7 +363,7 @@ export class Simulation {
     }
 
     // 建设、再生、出生（阶段 C 经济闭环）
-    if (!s.campaign) {
+    if (!s.campaign && !s.civilization) {
       this.maybeCreateSite()
       this.maybeCreateFarmSite()
     }
@@ -323,7 +372,7 @@ export class Simulation {
 
     // 纪事：里程碑检查（每 100 tick）与随机事件调度
     if (s.tick % 100 === 0) this.checkMilestones()
-    if (!s.campaign && s.tick >= s.nextEventAt) {
+    if (!s.campaign && !s.civilization && s.tick >= s.nextEventAt) {
       this.triggerEvent()
       s.nextEventAt = s.tick + 600 + Math.floor(this.rng.next() * 900)
     }
@@ -343,6 +392,7 @@ export class Simulation {
     }
 
     if (s.campaign) this.updateCampaign()
+    if (s.civilization) this.updateCivilization()
     s.rngState = rng.getState()
   }
 
@@ -354,6 +404,7 @@ export class Simulation {
     v.pathGoal = null
     v.deadTick = this.state.tick
     this.state.deaths++
+    this.populationTick = -1
     if (reason === 'starve') this.state.starveDeaths = (this.state.starveDeaths ?? 0) + 1
     else this.state.ageDeaths = (this.state.ageDeaths ?? 0) + 1
     const site = this.state.sites.find((x) => x.builderId === v.id)
@@ -397,6 +448,11 @@ export class Simulation {
       case 'wander':
         v.task = 'idle'
         break
+      case 'research':
+      case 'industry':
+      case 'mining':
+        this.actCivicWork(v)
+        break
       case 'idle':
         if (v.cool > 0) {
           v.cool--
@@ -414,7 +470,9 @@ export class Simulation {
     const dx = tx - v.x
     const dy = ty - v.y
     const d = Math.hypot(dx, dy)
-    const speed = PARAMS.moveSpeed * (v.stamina <= 0 ? 0.45 : 1)
+    const era = this.state.civilization?.era ?? 0
+    const road = this.state.civilization?.roads[Math.floor(v.y) * this.state.world.size + Math.floor(v.x)]
+    const speed = PARAMS.moveSpeed * (v.stamina <= 0 ? 0.45 : 1) * (1 + era * 0.12) * (road ? 1.35 : 1)
     if (d <= speed) {
       v.x = tx
       v.y = ty
@@ -514,7 +572,7 @@ export class Simulation {
     v.pathGoal = null
 
     // 幼儿：休息、玩耍（进食由涓涓流覆盖）
-    if (v.age < PARAMS.workAge) {
+    if (v.age < (s.civilization ? 18 : PARAMS.workAge)) {
       if (v.stamina < 30) {
         v.task = 'rest'
         v.sleepInPlace = false
@@ -535,6 +593,10 @@ export class Simulation {
     // 2) 手上有货先交库
     if (v.carry > 0.05 && v.carryType) {
       v.task = 'deposit'
+      return
+    }
+    if (s.civilization && v.civicJob) {
+      v.task = v.civicJob
       return
     }
     // 3) 工地缺人去建设（无工地则采集）
@@ -560,6 +622,13 @@ export class Simulation {
       return this.state.stock.wood < this.state.stock.stone * 2 + 30 ? 'wood' : 'stone'
     }
     const st = this.state.stock
+    if (this.state.civilization) {
+      const pop = this.aliveCount()
+      if (st.food < Math.max(100, pop * 6) && (!v || v.id % 5 !== 0)) return 'food'
+      if (st.wood < 250) return 'wood'
+      if (st.stone < 180) return 'stone'
+      return 'food'
+    }
     if (st.food < 20) return 'food'
     if (st.wood < PARAMS.houseWood) return 'wood'
     if (st.stone < PARAMS.houseStone) return 'stone'
@@ -572,34 +641,45 @@ export class Simulation {
   }
 
   private findResourceTile(type: ResourceType, v: Villager): number | null {
-    const w = this.state.world
-    const terrain = type === 'food' ? GRASS : type === 'wood' ? FOREST : STONE
-    let best = -1
-    let bestD = Infinity
-    for (let i = 0; i < w.tiles.length; i++) {
-      const t = w.tiles[i]
-      if (t.resource < 1) continue
-      // 食物可来自草地或农田：一律就近采集（效率优先，不做农田加权——
-      // 加权会让居民舍近求远，反而拖垮弱地形局的产出）
-      if (type === 'food') {
-        if (t.terrain !== GRASS && t.terrain !== FARMLAND) continue
-      } else if (t.terrain !== terrain) {
-        continue
-      }
-      if (v.failedTiles.includes(i)) continue
-      const x = i % w.size
-      const y = (i / w.size) | 0
-      const dx = x + 0.5 - v.x
-      const dy = y + 0.5 - v.y
-      const d =
-        (dx * dx + dy * dy) *
-        (this.state.campaign && v.profession === 'farmer' && t.terrain === FARMLAND ? 0.55 : 1)
-      if (d < bestD) {
-        bestD = d
-        best = i
-      }
+    const s = this.state,
+      w = s.world
+    if (this.occupiedVersion !== s.worldVersion + s.buildings.length) {
+      this.occupied = new Set(s.buildings.map((b) => b.y * w.size + b.x))
+      this.occupiedVersion = s.worldVersion + s.buildings.length
     }
-    return best >= 0 ? best : null
+    const search = (radius: number): number | null => {
+      let best = -1,
+        bestD = Infinity
+      const left = s.civilization ? Math.max(0, Math.floor(v.x) - radius) : 0
+      const right = s.civilization ? Math.min(w.size - 1, Math.floor(v.x) + radius) : w.size - 1
+      const top = s.civilization ? Math.max(0, Math.floor(v.y) - radius) : 0
+      const bottom = s.civilization ? Math.min(w.size - 1, Math.floor(v.y) + radius) : w.size - 1
+      for (let y = top; y <= bottom; y++)
+        for (let x = left; x <= right; x++) {
+          const i = y * w.size + x,
+            t = w.tiles[i]
+          if (
+            t.resource < 1 ||
+            resourceType(t.terrain) !== type ||
+            v.failedTiles.includes(i) ||
+            (s.civilization && this.occupied.has(i))
+          )
+            continue
+          const d =
+            ((x + 0.5 - v.x) ** 2 + (y + 0.5 - v.y) ** 2) *
+            (s.campaign && v.profession === 'farmer' && t.terrain === FARMLAND ? 0.55 : 1)
+          if (d < bestD) {
+            bestD = d
+            best = i
+          }
+        }
+      return best < 0 ? null : best
+    }
+    return (
+      (s.civilization ? search(5) : null) ??
+      search(12) ??
+      (s.civilization ? (search(32) ?? search(64)) : null)
+    )
   }
 
   private actGather(v: Villager): void {
@@ -658,7 +738,7 @@ export class Simulation {
     // 站在目标格上：周期采集
     v.work++
     if (v.work % PARAMS.gatherInterval === 0) {
-      const cap = CARRY_CAP[rt]
+      const cap = CARRY_CAP[rt] * (1 + (s.civilization?.era ?? 0) * 0.75)
       if (v.carry >= cap) {
         v.task = 'deposit'
         return
@@ -666,8 +746,21 @@ export class Simulation {
       const harvest =
         s.campaign && rt === 'food'
           ? (seasonAt(s.tick) === 3 ? 0.3 : 1) * (tile.terrain === FARMLAND ? farmBonus(s) : 1)
-          : 1
-      const take = Math.min(harvest, tile.resource, cap - v.carry)
+          : s.civilization && tile.terrain === FARMLAND
+            ? farmBonus(s) * (s.civilization.era >= 3 ? 1 + (s.civilization.era - 2) * 2 * this.gridRatio : 1)
+            : 1
+      const take = Math.min(
+        harvest *
+          (s.civilization
+            ? 1 +
+              s.civilization.era * 0.3 +
+              (rt === 'food'
+                ? Math.min(3, countCivic(s, 'well')) * 0.05
+                : Math.min(3, countCivic(s, 'workshop')) * 0.15)
+            : 1),
+        tile.resource,
+        cap - v.carry,
+      )
       tile.resource -= take
       v.carry += take
       v.carryType = rt
@@ -677,8 +770,13 @@ export class Simulation {
   private actDeposit(v: Villager): void {
     const s = this.state
     const w = s.world
-    const cx = w.size / 2
-    const cy = w.size / 2
+    const depot = s.civilization
+      ? s.buildings
+          .filter((b) => b.type === 'market' || b.type === 'granary')
+          .sort((a, b) => Math.hypot(a.x - v.x, a.y - v.y) - Math.hypot(b.x - v.x, b.y - v.y))[0]
+      : null
+    const cx = depot ? depot.x + 0.5 : w.size / 2
+    const cy = depot ? depot.y + 0.5 : w.size / 2
 
     if (Math.hypot(v.x - cx, v.y - cy) <= 1.7) {
       if (v.carry > 0.05 && v.carryType) {
@@ -693,8 +791,8 @@ export class Simulation {
       return
     }
 
-    const gx = Math.floor(cx) - 1
-    const gy = Math.floor(cy) - 1
+    const gx = depot ? depot.x : Math.floor(cx) - 1
+    const gy = depot ? depot.y : Math.floor(cy) - 1
     if (!v.pathGoal || v.pathGoal.x !== gx || v.pathGoal.y !== gy) {
       if (v.work % 15 === 0) {
         const path = findPath(w, v.x, v.y, gx, gy)
@@ -743,7 +841,7 @@ export class Simulation {
         v.work++
         return
       }
-      v.stamina += PARAMS.restRateHouse
+      v.stamina += PARAMS.restRateHouse * (1 + (s.civilization ? countCivic(s, 'park') * 0.1 : 0))
     } else {
       v.stamina += PARAMS.restRate
     }
@@ -784,13 +882,24 @@ export class Simulation {
 
   /** 村庄人口容量 = 基础 20 + 每座住房 4 */
   get capacity(): number {
+    if (this.state.civilization)
+      return (
+        20 +
+        this.state.buildings.reduce(
+          (n, b) =>
+            n +
+            (b.type === 'skyscraper' ? 20 : b.type === 'house' || !b.type ? HOUSE_CAPACITY[b.level ?? 0] : 0),
+          0,
+        )
+      )
     return PARAMS.baseCapacity + PARAMS.capacityPerHouse * buildingCount(this.state, 'house')
   }
 
   private aliveCount(): number {
-    let n = 0
-    for (const v of this.state.villagers) if (v.alive) n++
-    return n
+    if (this.populationTick === this.state.tick) return this.populationCount
+    this.populationCount = this.state.villagers.reduce((n, v) => n + Number(v.alive), 0)
+    this.populationTick = this.state.tick
+    return this.populationCount
   }
 
   /** 材料充足且规划住房不足时，自动落位一处工地（真实扣料） */
@@ -816,18 +925,21 @@ export class Simulation {
     const mid = Math.floor(w.size / 2)
     const cx = w.size / 2
     const cy = w.size / 2
-    for (let r = 2; r <= 16; r++) {
+    const occupied = new Set([...s.sites, ...s.buildings].map((b) => b.y * w.size + b.x))
+    for (let r = 2; r <= (s.civilization ? Math.min(100, w.size / 2 - 2) : 16); r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
           const x = mid + dx
           const y = mid + dy
           if (x < 1 || y < 1 || x >= w.size - 1 || y >= w.size - 1) continue
-          if (w.tiles[y * w.size + x].terrain !== GRASS) continue
+          const terrain = w.tiles[y * w.size + x].terrain
+          if (s.civilization ? ![GRASS, FOREST, STONE, 5, 6, 7, 8].includes(terrain) : terrain !== GRASS)
+            continue
+          if (s.civilization && (x % 4 === 0 || y % 4 === 0)) continue
           // 中央广场保留（交粮与活动空间）
           if (Math.abs(x + 0.5 - cx) <= 2.4 && Math.abs(y + 0.5 - cy) <= 2.4) continue
-          if (s.sites.some((si) => si.x === x && si.y === y)) continue
-          if (s.buildings.some((b) => b.x === x && b.y === y)) continue
+          if (occupied.has(y * w.size + x)) continue
           if (!findPath(w, cx, cy, x, y)) continue
           return { x, y }
         }
@@ -881,8 +993,19 @@ export class Simulation {
       if (site.type === 'farm') {
         this.completeFarm(site.x, site.y)
       } else {
-        s.buildings.push({ id: site.id, x: site.x, y: site.y, type: site.type ?? 'house' })
-        if (s.campaign) this.log('milestone', `${BUILDINGS[site.type ?? 'house'].name}落成`)
+        const upgraded =
+          site.upgradeId !== undefined ? s.buildings.find((b) => b.id === site.upgradeId) : null
+        if (upgraded) upgraded.level = s.civilization?.era ?? upgraded.level ?? 0
+        else
+          s.buildings.push({
+            id: site.id,
+            x: site.x,
+            y: site.y,
+            type: site.type ?? 'house',
+            ...(s.civilization ? { level: s.civilization.era } : {}),
+          })
+        if (s.civilization) this.connectRoad(site.x, site.y)
+        if (s.campaign) this.log('milestone', `${constructionName(site.type ?? 'house')}落成`)
       }
       v.task = 'idle'
       v.work = 0
@@ -924,17 +1047,21 @@ export class Simulation {
   /** 地表资源有限再生（草地食物 / 农田高产 / 森林木材，石头不可再生） */
   private regen(): void {
     const tiles = this.state.world.tiles
+    const buckets = this.state.civilization ? 16 : 1
     const winter = !!this.state.campaign && seasonAt(this.state.tick) === 3
-    const bonus = this.state.campaign ? farmBonus(this.state) : 1
-    for (let i = 0; i < tiles.length; i++) {
+    const civ = this.state.civilization
+    const bonus =
+      (this.state.campaign || civ ? farmBonus(this.state) : 1) *
+      (civ && civ.era >= 3 ? 1 + (civ.era - 2) * 2 * this.gridRatio : 1)
+    for (let i = this.state.tick % buckets; i < tiles.length; i += buckets) {
       const t = tiles[i]
       if (t.max <= 0 || t.resource >= t.max) continue
-      if (t.terrain === GRASS) {
-        t.resource = Math.min(t.max, t.resource + PARAMS.regenFood * (winter ? 0.12 : 1))
+      if (t.terrain === GRASS || t.terrain === 7) {
+        t.resource = Math.min(t.max, t.resource + PARAMS.regenFood * buckets * (winter ? 0.12 : 1))
       } else if (t.terrain === FARMLAND) {
-        t.resource = Math.min(t.max, t.resource + PARAMS.regenFarm * bonus * (winter ? 0.25 : 1))
+        t.resource = Math.min(t.max, t.resource + PARAMS.regenFarm * bonus * buckets * (winter ? 0.25 : 1))
       } else if (t.terrain === FOREST) {
-        t.resource = Math.min(t.max, t.resource + PARAMS.regenWood)
+        t.resource = Math.min(t.max, t.resource + PARAMS.regenWood * buckets)
       }
     }
   }
@@ -942,15 +1069,19 @@ export class Simulation {
   /** 定期生育：人口未满 + 口粮充足 + 有成年人 */
   private maybeBirth(): void {
     const s = this.state
+    if (s.civilization) {
+      this.demographicBirths()
+      return
+    }
     if (s.tick % (s.campaign ? 1800 : PARAMS.birthEvery) !== 0) return
     let adults = 0
     let alive = 0
     for (const v of s.villagers) {
       if (!v.alive) continue
       alive++
-      if (v.age >= PARAMS.workAge) adults++
+      if (v.age >= (s.civilization ? 18 : PARAMS.workAge)) adults++
     }
-    if (alive >= this.capacity) return
+    if (alive >= this.capacity || (s.civilization && alive >= 1800)) return
     if (adults < 2) return
     if (s.stock.food < PARAMS.birthFoodNeed) return
     s.stock.food -= PARAMS.birthFoodCost
@@ -961,6 +1092,264 @@ export class Simulation {
     baby.stamina = 100
     s.villagers.push(baby)
     s.births++
+    this.populationTick = -1
+  }
+
+  private initializeDemographics(v: Villager): void {
+    if (!v.sex) v.sex = this.rng.next() < 0.5 ? 'female' : 'male'
+    if (v.pregnancyDue === undefined) v.pregnancyDue = null
+    if (v.lastBirthTick === undefined) v.lastBirthTick = -CIVIC_YEAR_TICKS * 2
+  }
+
+  private demographicBirths(): void {
+    const s = this.state,
+      c = s.civilization!
+    const adults = s.villagers.filter((v) => v.alive && v.age >= 18)
+    const hasPartner = adults.some((v) => v.sex === 'male' && v.age < 65)
+    for (const mother of s.villagers) {
+      if (!mother.alive) continue
+      this.initializeDemographics(mother)
+      if (
+        mother.pregnancyDue !== null &&
+        mother.pregnancyDue !== undefined &&
+        s.tick >= mother.pregnancyDue
+      ) {
+        const baby = makeVillager(s.nextId++, mother.x, mother.y, this.rng, s.world)
+        baby.age = 0
+        baby.hunger = 90
+        baby.stamina = 100
+        baby.motherId = mother.id
+        this.initializeDemographics(baby)
+        s.villagers.push(baby)
+        s.births++
+        this.populationTick = -1
+        mother.pregnancyDue = null
+        mother.lastBirthTick = s.tick
+      }
+      if (
+        s.tick % 1800 !== 0 ||
+        !hasPartner ||
+        mother.sex !== 'female' ||
+        mother.age < 18 ||
+        mother.age > 42 ||
+        mother.pregnancyDue !== null
+      )
+        continue
+      // 270 天妊娠，产后至少间隔两年；参数是游戏模型，不是人口预测。
+      if (
+        s.tick - (mother.lastBirthTick ?? 0) < 2 * CIVIC_YEAR_TICKS ||
+        mother.hunger < 45 ||
+        s.stock.food < this.aliveCount() * 5 ||
+        this.aliveCount() >= this.capacity
+      )
+        continue
+      if (this.rng.next() < (c.era >= 3 ? 0.035 : 0.06)) mother.pregnancyDue = s.tick + 270 * 60
+    }
+  }
+
+  orderCivic(kind: ConstructionKind): boolean {
+    const s = this.state,
+      c = s.civilization
+    if (!c || s.sites.length >= 4 || this.blocked) return false
+    const cost = constructionCost(kind)
+    if (c.era < cost.era) return false
+    const steel = cost.steel
+    if (s.stock.wood < cost.wood || s.stock.stone < cost.stone || c.steel < steel) return false
+    const spot = this.findBuildSpot()
+    if (!spot) return false
+    s.stock.wood -= cost.wood
+    s.stock.stone -= cost.stone
+    c.steel -= steel
+    s.consumed.wood += cost.wood
+    s.consumed.stone += cost.stone
+    const tile = s.world.tiles[spot.y * s.world.size + spot.x]
+    tile.terrain = GRASS
+    tile.resource = 0
+    tile.max = 40
+    s.worldVersion++
+    s.sites.push({ id: s.nextId++, ...spot, type: kind, progress: 0, builderId: null })
+    return true
+  }
+
+  private connectRoad(x: number, y: number): void {
+    const s = this.state,
+      c = s.civilization!
+    const path = findPath(s.world, s.world.size / 2, s.world.size / 2, x, y)
+    if (!path) return
+    let px = s.world.size / 2,
+      py = px
+    for (const point of path) {
+      const length = Math.max(1, Math.ceil(Math.hypot(point.x - px, point.y - py) * 2))
+      for (let n = 0; n <= length; n++) {
+        const gx = Math.floor(px + ((point.x - px) * n) / length),
+          gy = Math.floor(py + ((point.y - py) * n) / length),
+          i = gy * s.world.size + gx
+        if (!c.roads[i] && isWalkable(s.world, gx, gy) && s.stock.stone >= 0.2) {
+          c.roads[i] = 1
+          s.stock.stone -= 0.2
+          s.consumed.stone += 0.2
+        }
+      }
+      px = point.x
+      py = point.y
+    }
+  }
+
+  private actCivicWork(v: Villager): void {
+    const s = this.state,
+      c = s.civilization
+    if (!c) {
+      v.task = 'idle'
+      return
+    }
+    const kind = v.task === 'research' ? 'school' : v.task === 'mining' ? 'quarry' : 'factory'
+    if (this.workplacesVersion !== s.buildings.length) {
+      this.workplaces = {
+        research: s.buildings.filter((b) => b.type === 'school'),
+        industry: s.buildings.filter((b) => b.type === 'factory'),
+        mining: s.buildings.filter((b) => b.type === 'quarry'),
+      }
+      this.workplacesVersion = s.buildings.length
+    }
+    const places = this.workplaces[kind === 'school' ? 'research' : kind === 'quarry' ? 'mining' : 'industry']
+    const job = places[v.id % Math.max(1, places.length)]
+    if (!job) {
+      v.task = 'idle'
+      return
+    }
+    if (Math.hypot(job.x + 0.5 - v.x, job.y + 0.5 - v.y) > 1) {
+      const path = findPath(s.world, v.x, v.y, job.x, job.y)
+      if (path) {
+        v.path = path
+        v.pathGoal = { x: job.x, y: job.y }
+      } else {
+        v.task = 'idle'
+        v.cool = 40
+      }
+      return
+    }
+    if (v.stamina < 5) {
+      v.task = 'rest'
+      return
+    }
+    v.stamina -= 0.025
+    if (kind === 'school') c.knowledge += 0.08
+    else if (kind === 'quarry') {
+      const extracted = Math.min(c.oreReserve, 0.08 * (c.era >= 3 ? this.gridRatio : 1))
+      c.oreReserve -= extracted
+      this.addStock('stone', extracted)
+    } else if (s.stock.wood >= 0.015 && s.stock.stone >= 0.01) {
+      const powered = this.gridRatio
+      c.steel += 0.02 * powered
+      s.stock.wood -= 0.015 * powered
+      s.stock.stone -= 0.01 * powered
+      s.consumed.wood += 0.015 * powered
+      s.consumed.stone += 0.01 * powered
+    }
+  }
+
+  private updateCivilization(): void {
+    const s = this.state,
+      c = s.civilization!
+    const adults = s.villagers.filter((v) => v.alive && v.age >= 18)
+    if (s.stock.food > 20) c.knowledge += adults.length * 0.0006
+    if (s.tick % 60 === 0) {
+      if (c.era < 4 && eraRequirements(s).every((r) => r.met)) {
+        c.era++
+        c.transitions.push({ era: c.era, tick: s.tick })
+        this.log('milestone', `文明进入${ERAS[c.era]}：新的生产方式与建筑已解锁`)
+      }
+      if (c.autoBuild) {
+        const next = nextConstruction(s)
+        if (next) this.orderCivic(next)
+        else if (s.sites.length < 4) {
+          const old = s.buildings.find(
+            (b) =>
+              b.type === 'house' &&
+              (b.level ?? 0) < c.era &&
+              !s.sites.some((site) => site.upgradeId === b.id),
+          )
+          if (old && s.stock.wood >= 20 && s.stock.stone >= 25 && (c.era < 4 || c.steel >= 10)) {
+            s.stock.wood -= 20
+            s.stock.stone -= 25
+            s.consumed.wood += 20
+            s.consumed.stone += 25
+            if (c.era >= 4) c.steel -= 10
+            s.sites.push({
+              id: s.nextId++,
+              x: old.x,
+              y: old.y,
+              type: 'house',
+              upgradeId: old.id,
+              progress: 0,
+              builderId: null,
+            })
+          }
+        }
+      }
+    }
+    if (s.tick % 300 === 0) {
+      const miners = Math.min(12, countCivic(s, 'quarry') * 2)
+      const researchers = Math.min(8, countCivic(s, 'school') * 2),
+        industrial = Math.min(12, countCivic(s, 'factory') * 3)
+      adults
+        .sort((a, b) => a.id - b.id)
+        .forEach((v, i) => {
+          const job =
+            i < researchers
+              ? 'research'
+              : i < researchers + industrial
+                ? 'industry'
+                : i < researchers + industrial + miners
+                  ? 'mining'
+                  : undefined
+          if (v.civicJob === job) return
+          for (const site of s.sites) if (site.builderId === v.id) site.builderId = null
+          v.civicJob = job
+          v.task = 'idle'
+          v.path = []
+          v.pathGoal = null
+          v.gatherTile = null
+          v.cool = 0
+        })
+    }
+    // 迁移每月结算：有人愿意来，还须有岗位、住房和安置口粮；外部人口池有限。
+    if (
+      c.era >= 1 &&
+      s.tick % 1800 === 0 &&
+      (c.era === 1 ? countCivic(s, 'granary') > 0 : countCivic(s, 'market') > 0) &&
+      s.stock.food > Math.max(120, this.aliveCount() * 5)
+    ) {
+      const jobs =
+        20 +
+        countCivic(s, 'farm') * 3 +
+        countCivic(s, 'factory') * 30 +
+        countCivic(s, 'market') * 12 +
+        countCivic(s, 'skyscraper') * 32
+      const count = Math.max(
+        0,
+        Math.min(
+          Math.max(1, Math.ceil(this.aliveCount() * 0.03)),
+          20,
+          this.capacity - this.aliveCount(),
+          1800 - this.aliveCount(),
+          c.migrationPool,
+          jobs - adults.length,
+          Math.floor(s.stock.food / 20),
+        ),
+      )
+      for (let i = 0; i < count; i++) {
+        const person = makeVillager(s.nextId++, s.world.size / 2, s.world.size / 2, this.rng, s.world)
+        this.initializeDemographics(person)
+        s.villagers.push(person)
+        this.populationTick = -1
+      }
+      c.immigrants += count
+      c.migrationPool -= count
+      s.stock.food -= count * 20
+      s.consumed.food += count * 20
+      if (count > 0) this.log('event', `最近 30 天迁入 ${count} 名成年人（安置口粮 −${count * 20}）`)
+    }
   }
 
   get blocked(): boolean {
@@ -978,7 +1367,9 @@ export class Simulation {
     const s = this.state
     if (!s.campaign) return
     const { farmers, builders } = workforce(s)
-    const adults = s.villagers.filter((v) => v.alive && v.age >= PARAMS.workAge).sort((a, b) => a.id - b.id)
+    const adults = s.villagers
+      .filter((v) => v.alive && v.age >= (s.civilization ? 18 : PARAMS.workAge))
+      .sort((a, b) => a.id - b.id)
     adults.forEach((v, i) => {
       const next = i < farmers ? 'farmer' : i < farmers + builders ? 'builder' : 'gatherer'
       if (v.profession === next) return
@@ -1043,6 +1434,7 @@ export class Simulation {
     if (event.id === 'refugees' && choice === 0) {
       for (let i = 0; i < 5; i++)
         s.villagers.push(makeVillager(s.nextId++, s.world.size / 2, s.world.size / 2, this.rng, s.world))
+      this.populationTick = -1
     } else if (event.id === 'merchant' && choice === 0) this.addStock('food', 220)
     else if (event.id === 'harvest') {
       if (choice === 0) this.addStock('food', 160)

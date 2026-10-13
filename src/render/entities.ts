@@ -1,4 +1,6 @@
-import { BUILDINGS, PROFESSION_LABEL, seasonAt } from '../sim/survival'
+import { drawCivicBuilding } from './city'
+import { constructionName } from '../sim/civilization'
+import { PROFESSION_LABEL, seasonAt } from '../sim/survival'
 import type { SimState, Villager } from '../sim/types'
 import { TILE, worldToScreen, type Camera } from './camera'
 import type { View } from './draw'
@@ -253,9 +255,20 @@ function drawLabels(
   } else {
     const s = worldToScreen(cam, view.w, view.h, selection.x + 0.5, selection.y + 0.5)
     const t = state.world.tiles[selection.y * state.world.size + selection.x]
-    const names = ['草地 · 食物', '森林 · 木材', '水域', '石地 · 石头', '农田 · 食物']
+    const names = [
+      '草地 · 食物',
+      '森林 · 木材',
+      '水域',
+      '矿区 · 石头',
+      '农田 · 食物',
+      '沙漠',
+      '雪地',
+      '湿地 · 食物',
+      '丘陵 · 石头',
+      '山地',
+    ]
     const building = state.buildings.find((b) => b.x === selection.x && b.y === selection.y)
-    const label = `(${selection.x}, ${selection.y}) ${building ? BUILDINGS[building.type ?? 'house'].name : names[t.terrain]}`
+    const label = `(${selection.x}, ${selection.y}) ${building ? constructionName(building.type ?? 'house') : names[t.terrain]}`
     ctx.fillStyle = 'rgba(10, 13, 9, 0.85)'
     const w = ctx.measureText(label).width + 10
     ctx.fillRect(s.x - w / 2, s.y - 16, w, 16)
@@ -268,18 +281,39 @@ function drawLabels(
 const ROAD_MIN = 25
 
 /** 土路：踩踏密集的格子渐变为土色（画面层的「痕迹」） */
-function drawRoads(ctx: CanvasRenderingContext2D, state: SimState): void {
+function drawRoads(ctx: CanvasRenderingContext2D, state: SimState, cam: Camera, view: View): void {
   const w = state.world
   const size = w.size
   const walk = state.walk
   if (!walk) return
   ctx.fillStyle = 'rgba(124, 96, 58, 0.44)'
-  for (let i = 0; i < walk.length; i++) {
-    if (walk[i] < ROAD_MIN) continue
-    const t = w.tiles[i].terrain
-    if (t === 2) continue // 水域
-    ctx.fillRect((i % size) * TILE + 3, ((i / size) | 0) * TILE + 3, TILE - 6, TILE - 6)
-  }
+  const radiusX = Math.ceil(view.w / (TILE * cam.zoom) / 2) + 2,
+    radiusY = Math.ceil(view.h / (TILE * cam.zoom) / 2) + 2
+  for (
+    let y = Math.max(0, Math.floor(cam.y) - radiusY);
+    y <= Math.min(size - 1, Math.ceil(cam.y) + radiusY);
+    y++
+  )
+    for (
+      let x = Math.max(0, Math.floor(cam.x) - radiusX);
+      x <= Math.min(size - 1, Math.ceil(cam.x) + radiusX);
+      x++
+    ) {
+      const i = y * size + x,
+        road = state.civilization?.roads[i]
+      if (road) {
+        ctx.fillStyle =
+          state.civilization!.era >= 3 ? '#4f5960' : state.civilization!.era >= 2 ? '#a69f88' : '#ac936c'
+        ctx.fillRect(x * TILE, y * TILE, 16, 16)
+        if (state.civilization!.era >= 3 && cam.zoom > 0.3) {
+          ctx.fillStyle = '#ccb86b'
+          ctx.fillRect(x * TILE + 7, y * TILE + 6, 1, 3)
+        }
+      } else if (walk[i] >= ROAD_MIN && w.tiles[i].terrain !== 2) {
+        ctx.fillStyle = 'rgba(124,96,58,.44)'
+        ctx.fillRect(x * TILE + 3, y * TILE + 3, TILE - 6, TILE - 6)
+      }
+    }
 }
 
 /** 实体层：土路 → 交粮点 → 住房/工地 → 尸体 → 居民 → 选中高亮 → 屏幕标签 */
@@ -310,9 +344,13 @@ export function drawEntities(
       }
     }
   }
-  drawRoads(ctx, state)
+  drawRoads(ctx, state, cam, view)
   drawStockpile(ctx, state)
-  for (const b of state.buildings) {
+  for (const b of [...state.buildings].sort((a, b) => a.y - b.y)) {
+    if (state.civilization) {
+      drawCivicBuilding(ctx, b, state, timeMs)
+      continue
+    }
     drawHouse(ctx, b.x, b.y)
     // 不同建筑用屋顶色与门口物件区分。
     if (b.type === 'granary' || b.type === 'farmhouse') {

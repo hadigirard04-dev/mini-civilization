@@ -7,7 +7,24 @@ export const STONE = 3
 /** 农田：由草地开垦而来，不参与自然生成 */
 export const FARMLAND = 4
 
-export type Terrain = 0 | 1 | 2 | 3 | 4
+export const DESERT = 5
+export const SNOW = 6
+export const WETLAND = 7
+export const HILLS = 8
+export const MOUNTAIN = 9
+export const TERRAIN_NAMES = [
+  '草原',
+  '森林',
+  '湖泊 / 河流',
+  '矿区',
+  '农田',
+  '沙漠',
+  '雪地',
+  '湿地',
+  '丘陵',
+  '山地',
+]
+export type Terrain = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
 
 export type ResourceType = 'food' | 'wood' | 'stone'
 
@@ -35,10 +52,12 @@ export function resourceType(terrain: Terrain): ResourceType | null {
   switch (terrain) {
     case GRASS:
     case FARMLAND:
+    case WETLAND:
       return 'food'
     case FOREST:
       return 'wood'
     case STONE:
+    case HILLS:
       return 'stone'
     default:
       return null
@@ -61,7 +80,7 @@ export function getTile(world: World, x: number, y: number): Tile | null {
 /** 水域不可通行，其余地形可通行 */
 export function isWalkable(world: World, x: number, y: number): boolean {
   const t = getTile(world, x, y)
-  return t !== null && t.terrain !== WATER
+  return t !== null && t.terrain !== WATER && t.terrain !== MOUNTAIN
 }
 
 function smoothstep(t: number): number {
@@ -99,8 +118,8 @@ function percentileCut(values: Float64Array, p: number): number {
 }
 
 /** 生成 64×64 世界：双八度高程 + 湿度，按分位数划定水域/石地/森林 */
-export function generateWorld(seed: number): World {
-  const size = 64
+export function generateWorld(seed: number, size = 64, biomes = false): World {
+  if (![64, 128, 256].includes(size)) throw new Error('Unsupported world size')
   const elevNoise = makeNoise(createRng(seed ^ 0x9e3779b9), 6)
   const detailNoise = makeNoise(createRng(seed ^ 0x85ebca6b), 14)
   const moistNoise = makeNoise(createRng(seed ^ 0xc2b2ae35), 8)
@@ -141,7 +160,40 @@ export function generateWorld(seed: number): World {
   for (let k = 0; k < landIdx.length; k++) landMoist[k] = moist[landIdx[k]]
   const forestCut = percentileCut(landMoist, 0.42)
   for (const i of landIdx) {
-    tiles[i] = moist[i] >= forestCut ? { terrain: FOREST, resource: 0, max: 0 } : { terrain: GRASS, resource: 0, max: 0 }
+    tiles[i] =
+      moist[i] >= forestCut
+        ? { terrain: FOREST, resource: 0, max: 0 }
+        : { terrain: GRASS, resource: 0, max: 0 }
+  }
+
+  if (biomes) {
+    const mountainCut = percentileCut(elev, 0.96)
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++) {
+        const i = y * size + x,
+          t = tiles[i]
+        if (t.terrain === WATER) continue
+        if (elev[i] >= mountainCut) t.terrain = MOUNTAIN
+        else if (y < size * 0.17) t.terrain = SNOW
+        else if (x > size * 0.72 && y > size * 0.55) t.terrain = DESERT
+        else if (t.terrain === STONE && moist[i] > 0.45) t.terrain = HILLS
+        else if (moist[i] > 0.72 && elev[i] < waterCut + 0.13) t.terrain = WETLAND
+      }
+    // 出生区是可持续的小片混合平原，外围的生态差异仍完整保留。
+    const mid = size / 2
+    for (let y = mid - 14; y <= mid + 14; y++)
+      for (let x = mid - 14; x <= mid + 14; x++) {
+        const i = y * size + x
+        const terrain =
+          Math.abs(x - mid) < 6 && Math.abs(y - mid) < 6
+            ? GRASS
+            : (x * 7 + y * 11 + seed) % 9 < 3
+              ? FOREST
+              : (x + y) % 13 === 0
+                ? STONE
+                : GRASS
+        tiles[i] = { terrain, resource: 0, max: 0 }
+      }
   }
 
   // 中央留出空地作为村庄中心（保证出生点与建设地）
@@ -156,12 +208,14 @@ export function generateWorld(seed: number): World {
   for (const t of tiles) {
     switch (t.terrain) {
       case GRASS:
+      case WETLAND:
         t.max = GRASS_MAX
         break
       case FOREST:
         t.max = FOREST_MAX
         break
       case STONE:
+      case HILLS:
         t.max = STONE_MAX
         break
       default:

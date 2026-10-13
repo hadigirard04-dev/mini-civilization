@@ -1,5 +1,6 @@
+import type { CivilizationState, ConstructionKind } from './civilization'
 import type { ResourceType, World } from './world'
-import type { CampaignState, BuildingKind, Profession } from './survival'
+import type { CampaignState, Profession } from './survival'
 
 export interface Point {
   x: number
@@ -7,9 +8,15 @@ export interface Point {
 }
 
 /** 居民当前任务 */
-export type TaskKind = 'idle' | 'wander' | 'eat' | 'rest' | 'deposit' | 'gather' | 'build'
+export type TaskKind =
+  'idle' | 'wander' | 'eat' | 'rest' | 'deposit' | 'gather' | 'build' | 'research' | 'industry' | 'mining'
 
 export interface Villager {
+  sex?: 'female' | 'male'
+  pregnancyDue?: number | null
+  lastBirthTick?: number
+  motherId?: number
+  civicJob?: 'research' | 'industry' | 'mining'
   profession?: Profession
   id: number
   name: string
@@ -64,11 +71,13 @@ export interface BuildSite {
   progress: number
   builderId: number | null
   /** 工地类型：住房或农田（旧存档缺省视为住房） */
-  type?: BuildingKind
+  upgradeId?: number
+  type?: ConstructionKind
 }
 
 export interface Building {
-  type?: Exclude<BuildingKind, 'farm'>
+  level?: number
+  type?: Exclude<ConstructionKind, 'farm'>
   id: number
   x: number
   y: number
@@ -98,6 +107,7 @@ export interface JournalEntry {
 /** 全部可序列化的模拟状态（存档 = 直接 JSON 化本结构） */
 export interface SimState {
   /** null 为旧版沙盒；首年挑战独立保存，旧存档不会强行切换玩法。 */
+  civilization: CivilizationState | null
   campaign: CampaignState | null
   tick: number
   world: World

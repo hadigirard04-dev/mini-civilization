@@ -1,4 +1,5 @@
 import type { SimState } from './types'
+import { countCivic } from './civilization'
 
 export type Profession = 'farmer' | 'builder' | 'gatherer'
 export type BuildingKind = 'house' | 'granary' | 'farmhouse' | 'farm'
@@ -91,6 +92,7 @@ export function buildingCount(state: SimState, kind: Exclude<BuildingKind, 'farm
   return state.buildings.filter((b) => (b.type ?? 'house') === kind).length
 }
 export function foodCapacity(state: SimState): number {
+  if (state.civilization) return 600 + 900 * countCivic(state, 'granary')
   return state.campaign ? 300 + 900 * buildingCount(state, 'granary') : Infinity
 }
 export function farmBonus(state: SimState): number {

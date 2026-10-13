@@ -1,3 +1,4 @@
+import { constructionName } from '../sim/civilization'
 import { useEffect, useRef } from 'react'
 import { BUILDINGS, EVENTS, SEASONS, type BuildingKind, type SurvivalView } from '../sim/survival'
 
@@ -126,7 +127,7 @@ export default function SurvivalPanel({ c, blocked, onWorkforce, onBuild }: Prop
         {c.sites.map((s) => (
           <div className="site-row" key={s.id}>
             <span>
-              {BUILDINGS[s.type ?? 'house'].name} · {Math.floor(s.progress * 100)}%
+              {constructionName(s.type ?? 'house')} · {Math.floor(s.progress * 100)}%
             </span>
             <span>{s.builderId === null ? '等候建筑工' : '施工中'}</span>
           </div>

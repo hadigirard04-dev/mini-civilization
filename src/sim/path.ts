@@ -33,7 +33,7 @@ function segWalkable(world: World, x0: number, y0: number, x1: number, y1: numbe
   let tMaxX = dx === 0 ? Infinity : ((stepX > 0 ? ix + 1 : ix) - x0) / dx
   let tMaxY = dy === 0 ? Infinity : ((stepY > 0 ? iy + 1 : iy) - y0) / dy
 
-  for (let guard = 0; guard < 400; guard++) {
+  for (let guard = 0; guard < world.size * 2 + 4; guard++) {
     let t: number
     if (tMaxX < tMaxY) {
       t = tMaxX
@@ -88,6 +88,7 @@ export function findPath(world: World, sx: number, sy: number, tx: number, ty: n
   if (goalX < 0 || goalY < 0 || goalX >= size || goalY >= size) return null
   if (!isWalkable(world, goalX, goalY)) return null
   if (startX === goalX && startY === goalY) return []
+  if (segWalkable(world, sx, sy, goalX + 0.5, goalY + 0.5)) return [{ x: goalX, y: goalY }]
 
   const startI = startY * size + startX
   const goalI = goalY * size + goalX

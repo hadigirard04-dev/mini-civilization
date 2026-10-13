@@ -26,7 +26,7 @@ export function screenToWorld(cam: Camera, viewW: number, viewH: number, sx: num
 
 /** 将相机限制在世界范围内（世界小于视口时居中） */
 export function clampCamera(cam: Camera, worldSize: number, viewW: number, viewH: number): void {
-  cam.zoom = clamp(cam.zoom, 0.4, 6)
+  cam.zoom = clamp(cam.zoom, 0.06, 6)
   const sps = TILE * cam.zoom
   const halfW = viewW / 2 / sps
   const halfH = viewH / 2 / sps

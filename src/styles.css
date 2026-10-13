@@ -1015,3 +1015,183 @@ input:focus-visible {
     padding: 20px;
   }
 }
+/* 大陆与城市 */
+.evolution-panel {
+  background: linear-gradient(140deg, #273936, #121c19);
+}
+.era-track {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  margin: 14px 0;
+  text-align: center;
+}
+.era-track span {
+  font-size: 17px;
+  color: #788c84;
+  border-bottom: 3px solid #34463d;
+  padding: 5px 0;
+}
+.era-track small {
+  display: block;
+  font-size: 9px;
+  margin: 4px 0;
+  line-height: 1.5;
+}
+.era-track .current {
+  color: #f2c75d;
+  border-color: #f2c75d;
+}
+.era-track .done {
+  color: #91c4a3;
+  border-color: #91c4a3;
+}
+.city-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 12px 0;
+  font-size: 11px;
+  color: #aabfb4;
+}
+.city-stats b {
+  display: block;
+  font-size: 23px;
+  color: #e6ebe1;
+  font-variant-numeric: tabular-nums;
+}
+.next-era {
+  font-size: 12px;
+  color: #ebc66a;
+  margin: 14px 0 8px;
+}
+.era-requirements {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+.era-requirements span {
+  padding: 3px 6px;
+  font-size: 10px;
+  background: #25312a;
+  border-radius: 4px;
+  color: #b4b9a7;
+}
+.era-requirements .met {
+  color: #a7cf93;
+}
+.auto-build {
+  width: 100%;
+  margin-bottom: 8px;
+}
+.development-priority {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.development-priority .btn {
+  padding: 0 6px;
+}
+.civic-catalog summary {
+  padding: 10px 0;
+  cursor: pointer;
+  color: #d4bd7d;
+  font-size: 12px;
+}
+.mode-buttons {
+  display: flex;
+  gap: 8px;
+}
+.mode-buttons button {
+  flex: 1;
+}
+.city-map-heading {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  background: #0f1c18de;
+  border: 1px solid #53695b;
+  padding: 9px 13px;
+  border-radius: 7px;
+  pointer-events: none;
+}
+.city-map-heading b {
+  display: block;
+  color: #ead07b;
+  font-size: 15px;
+}
+.city-map-heading span {
+  font-size: 11px;
+  color: #b4c9bc;
+}
+.map-controls {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  display: flex;
+  gap: 6px;
+}
+.map-controls button {
+  min-height: 44px;
+  padding: 0 12px;
+  color: #e5eada;
+  background: #172b24ed;
+  border: 1px solid #6a806c;
+  border-radius: 5px;
+  font: inherit;
+  cursor: pointer;
+}
+.mini-map {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: #14231ddd;
+  border: 1px solid #688472;
+  padding: 5px;
+  border-radius: 5px;
+}
+.mini-map span {
+  display: block;
+  font-size: 9px;
+  color: #c7d5c5;
+  margin-bottom: 4px;
+}
+.mini-map canvas {
+  width: 108px !important;
+  height: 108px !important;
+  cursor: crosshair;
+  touch-action: none;
+}
+@media (max-width: 860px) {
+  .mini-map canvas {
+    width: 82px !important;
+    height: 82px !important;
+  }
+  .city-map-heading {
+    left: 10px;
+    top: 12px;
+    padding: 6px 9px;
+  }
+  .city-map-heading b {
+    font-size: 13px;
+  }
+  .city-map-heading span {
+    font-size: 10px;
+  }
+  .mini-map {
+    right: 10px;
+    top: 12px;
+  }
+  .brand-sub {
+    display: none;
+  }
+  .seed-tag {
+    font-size: 9px;
+  }
+  .stage {
+    height: 55vh;
+    min-height: 330px;
+  }
+}

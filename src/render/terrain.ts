@@ -1,5 +1,17 @@
 import { createRng, type Rng } from '../sim/rng'
-import { FARMLAND, FOREST, GRASS, STONE, WATER, type World } from '../sim/world'
+import {
+  FARMLAND,
+  FOREST,
+  GRASS,
+  STONE,
+  WATER,
+  DESERT,
+  SNOW,
+  WETLAND,
+  HILLS,
+  MOUNTAIN,
+  type World,
+} from '../sim/world'
 import { TILE } from './camera'
 
 /** 地形配色：自然、分层的像素风 */
@@ -24,7 +36,14 @@ function fillBase(ctx: CanvasRenderingContext2D, px: number, py: number, color: 
   ctx.fillRect(px, py, TILE, TILE)
 }
 
-function speckle(ctx: CanvasRenderingContext2D, px: number, py: number, color: string, count: number, rng: Rng): void {
+function speckle(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  color: string,
+  count: number,
+  rng: Rng,
+): void {
   ctx.fillStyle = color
   for (let i = 0; i < count; i++) {
     ctx.fillRect(px + rng.nextInt(TILE), py + rng.nextInt(TILE), 1, 1)
@@ -115,6 +134,49 @@ function drawTile(ctx: CanvasRenderingContext2D, world: World, x: number, y: num
       speckle(ctx, px, py, STONE_LIGHT, 5, rng)
       break
     }
+    case DESERT: {
+      fillBase(ctx, px, py, alt ? '#c9ac70' : '#d6ba7f')
+      speckle(ctx, px, py, '#b6995f', 4, rng)
+      ctx.fillStyle = '#e4cd96'
+      ctx.fillRect(px + 2, py + 7, 11, 1)
+      break
+    }
+    case SNOW: {
+      fillBase(ctx, px, py, alt ? '#d0dee3' : '#bdced8')
+      speckle(ctx, px, py, '#eaf3ef', 5, rng)
+      ctx.fillStyle = '#91a6b5'
+      ctx.fillRect(px + 3, py + 10, 6, 2)
+      break
+    }
+    case WETLAND: {
+      fillBase(ctx, px, py, '#688d77')
+      ctx.fillStyle = '#43848d'
+      ctx.fillRect(px + 2, py + 6, 11, 5)
+      ctx.fillStyle = '#b9ad62'
+      ctx.fillRect(px + 3, py + 2, 1, 7)
+      ctx.fillRect(px + 10, py + 4, 1, 6)
+      break
+    }
+    case HILLS: {
+      fillBase(ctx, px, py, '#90945d')
+      ctx.fillStyle = '#787d51'
+      ctx.fillRect(px + 2, py + 5, 12, 8)
+      ctx.fillStyle = '#abb47d'
+      ctx.fillRect(px + 5, py + 2, 6, 6)
+      break
+    }
+    case MOUNTAIN: {
+      fillBase(ctx, px, py, '#716f71')
+      ctx.fillStyle = '#525e67'
+      ctx.beginPath()
+      ctx.moveTo(px, py + 15)
+      ctx.lineTo(px + 8, py - 3)
+      ctx.lineTo(px + 16, py + 15)
+      ctx.fill()
+      ctx.fillStyle = '#d1dbdf'
+      ctx.fillRect(px + 6, py, 4, 4)
+      break
+    }
     case FARMLAND: {
       // 深棕耕地 + 横向垄沟 + 零星绿芽
       fillBase(ctx, px, py, '#6b4a2a')
@@ -122,7 +184,7 @@ function drawTile(ctx: CanvasRenderingContext2D, world: World, x: number, y: num
       for (let r = 1; r < TILE; r += 4) {
         ctx.fillRect(px, py + r, TILE, 2)
       }
-      ctx.fillStyle = '#7fae4e'
+      ctx.fillStyle = '#d5be58'
       for (let i = 0; i < 5; i++) {
         ctx.fillRect(px + 1 + rng.nextInt(TILE - 3), py + 1 + rng.nextInt(TILE - 3), 2, 1)
       }
@@ -132,6 +194,7 @@ function drawTile(ctx: CanvasRenderingContext2D, world: World, x: number, y: num
 }
 
 /** 离屏生成整张地形画布（世界变化时重建一次） */
+const rendered = new WeakMap<HTMLCanvasElement, number[]>()
 export function buildTerrainCanvas(world: World): HTMLCanvasElement {
   const canvas = document.createElement('canvas')
   canvas.width = world.size * TILE
@@ -144,5 +207,21 @@ export function buildTerrainCanvas(world: World): HTMLCanvasElement {
       drawTile(ctx, world, x, y, rng)
     }
   }
+  rendered.set(
+    canvas,
+    world.tiles.map((t) => t.terrain),
+  )
   return canvas
+}
+
+/** 仅重画变化地块，避免 256×256 地图每次建设都重绘全图。 */
+export function patchTerrainCanvas(canvas: HTMLCanvasElement, world: World): void {
+  const old = rendered.get(canvas),
+    ctx = canvas.getContext('2d')
+  if (!old || !ctx) return
+  for (let i = 0; i < old.length; i++)
+    if (old[i] !== world.tiles[i].terrain) {
+      drawTile(ctx, world, i % world.size, Math.floor(i / world.size), createRng(world.seed ^ (i * 73856093)))
+      old[i] = world.tiles[i].terrain
+    }
 }

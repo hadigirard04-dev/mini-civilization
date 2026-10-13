@@ -1,10 +1,12 @@
+import { civilizationView, ERAS, type ConstructionKind, type CivilizationView } from './sim/civilization'
+import MiniMap from './ui/MiniMap'
 import { buildingCount, survivalView, SEASONS, type BuildingKind } from './sim/survival'
 import { CampaignDialog } from './ui/SurvivalPanel'
 import { useEffect, useRef, useState } from 'react'
 import { clampCamera, screenToWorld, TILE, type Camera } from './render/camera'
 import { render, type View } from './render/draw'
 import { drawEntities, type Selection } from './render/entities'
-import { buildTerrainCanvas } from './render/terrain'
+import { buildTerrainCanvas, patchTerrainCanvas } from './render/terrain'
 import { AUTO_SAVE_KEY, loadFrom, saveTo } from './sim/save'
 import { Simulation } from './sim/simulation'
 import type { ResourceType } from './sim/world'
@@ -25,6 +27,12 @@ function makeSnapshot(sim: Simulation, selection: Selection): UiSnapshot {
     const v = s.villagers.find((x) => x.id === selection.id)
     if (v) {
       villager = {
+        civicJob: v.civicJob,
+        sex: v.sex,
+        pregnancyDays:
+          v.pregnancyDue === null || v.pregnancyDue === undefined
+            ? null
+            : Math.max(0, Math.ceil((v.pregnancyDue - s.tick) / 60)),
         profession: v.profession,
         id: v.id,
         name: v.name,
@@ -42,6 +50,7 @@ function makeSnapshot(sim: Simulation, selection: Selection): UiSnapshot {
     if (t) tile = { x: selection.x, y: selection.y, terrain: t.terrain, resource: t.resource, max: t.max }
   }
   return {
+    civilization: civilizationView(s),
     campaign: survivalView(s),
     blocked: sim.blocked,
     tick: s.tick,
@@ -50,7 +59,9 @@ function makeSnapshot(sim: Simulation, selection: Selection): UiSnapshot {
     seed: s.world.seed,
     pop,
     capacity: sim.capacity,
-    buildings: buildingCount(s, 'house'),
+    buildings:
+      buildingCount(s, 'house') +
+      (s.civilization ? s.buildings.filter((b) => b.type === 'skyscraper').length : 0),
     sites: s.sites.length,
     births: s.births,
     deaths: s.deaths,
@@ -76,12 +87,16 @@ export default function App() {
     } catch {
       loaded = null
     }
-    const fresh = new Simulation(randomSeed(), 'survival')
+    const fresh = new Simulation(randomSeed(), 'evolution')
     fresh.paused = true
-    fresh.speed = 2
+    fresh.speed = 20
     simRef.current = loaded ?? fresh
   }
-  const camRef = useRef<Camera>({ x: 32, y: 32, zoom: 1.5 })
+  const camRef = useRef<Camera>({
+    x: simRef.current!.state.world.size / 2,
+    y: simRef.current!.state.world.size / 2,
+    zoom: 1.5,
+  })
   const viewRef = useRef<View>({ w: 0, h: 0, dpr: 1 })
   const terrainRef = useRef<HTMLCanvasElement | null>(null)
   const selectionRef = useRef<Selection>(null)
@@ -159,7 +174,7 @@ export default function App() {
       const snap = makeSnapshot(sim, selectionRef.current)
       if (snap.worldVersion !== worldVersionRef.current) {
         worldVersionRef.current = snap.worldVersion
-        terrainRef.current = buildTerrainCanvas(sim.state.world)
+        if (terrainRef.current) patchTerrainCanvas(terrainRef.current, sim.state.world)
       }
       setUi(snap)
     }, 200)
@@ -273,7 +288,7 @@ export default function App() {
         const pair = [...pointers.values()].slice(0, 2)
         const ratio = distance(beforePair) > 1 ? distance(pair) / distance(beforePair) : 1
         const cam = camRef.current
-        cam.zoom = Math.min(6, Math.max(0.4, cam.zoom * ratio))
+        cam.zoom = Math.min(6, Math.max(0.06, cam.zoom * ratio))
         const rect = canvas.getBoundingClientRect()
         const center = mid(pair),
           view = viewRef.current,
@@ -327,7 +342,7 @@ export default function App() {
       const cam = camRef.current
       const view = viewRef.current
       const before = screenToWorld(cam, view.w, view.h, sx, sy)
-      cam.zoom = Math.min(6, Math.max(0.4, cam.zoom * Math.exp(-e.deltaY * 0.0012)))
+      cam.zoom = Math.min(6, Math.max(0.06, cam.zoom * Math.exp(-e.deltaY * 0.0012)))
       const sps = TILE * cam.zoom
       cam.x = before.x - (sx - view.w / 2) / sps
       cam.y = before.y - (sy - view.h / 2) / sps
@@ -360,12 +375,12 @@ export default function App() {
     sim.speed = n
     setUi((prev) => ({ ...prev, speed: n }))
   }
-  const resetWorld = (seedText: string, mode: 'survival' | 'sandbox' = 'survival') => {
+  const resetWorld = (seedText: string, mode: 'survival' | 'sandbox' | 'evolution' = 'evolution') => {
     const parsed = Number.parseInt(seedText.trim(), 10)
     const seed = Number.isFinite(parsed) ? parsed : randomSeed()
     const prev = simRef.current!
     const next = new Simulation(seed, mode)
-    next.paused = mode === 'survival'
+    next.paused = true
     next.speed = prev.speed
     simRef.current = next
     const half = next.state.world.size / 2
@@ -445,22 +460,81 @@ export default function App() {
     }
   }
 
+  const construct = (kind: ConstructionKind) => {
+    if (!simRef.current!.orderCivic(kind)) flashMsg('材料不足、未解锁或施工队列已满')
+    setUi(makeSnapshot(simRef.current!, selectionRef.current))
+  }
+  const toggleAuto = () => {
+    const c = simRef.current!.state.civilization
+    if (c) c.autoBuild = !c.autoBuild
+    setUi(makeSnapshot(simRef.current!, selectionRef.current))
+  }
+  const setPriority = (priority: CivilizationView['priority']) => {
+    const c = simRef.current!.state.civilization
+    if (c) c.priority = priority
+    setUi(makeSnapshot(simRef.current!, selectionRef.current))
+  }
+  const navigate = (x: number, y: number) => {
+    camRef.current.x = x
+    camRef.current.y = y
+    clampCamera(camRef.current, simRef.current!.state.world.size, viewRef.current.w, viewRef.current.h)
+  }
+  const mapOverview = (city: boolean) => {
+    const s = simRef.current!.state,
+      view = viewRef.current,
+      points = s.buildings
+    const minX = city ? Math.min(...points.map((b) => b.x), s.world.size / 2) - 8 : 0,
+      maxX = city ? Math.max(...points.map((b) => b.x), s.world.size / 2) + 8 : s.world.size
+    const minY = city ? Math.min(...points.map((b) => b.y), s.world.size / 2) - 10 : 0,
+      maxY = city ? Math.max(...points.map((b) => b.y), s.world.size / 2) + 8 : s.world.size
+    camRef.current = {
+      x: (minX + maxX) / 2,
+      y: (minY + maxY) / 2,
+      zoom: Math.min(view.w / (16 * (maxX - minX)), view.h / (16 * (maxY - minY)), 2),
+    }
+    clampCamera(camRef.current, s.world.size, view.w, view.h)
+  }
+
   return (
     <div className="app">
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark">▦</span>
           微型文明
-          <span className="brand-sub">{ui.campaign ? 'First Winter' : 'Sandbox'}</span>
+          <span className="brand-sub">
+            {ui.civilization ? 'World Evolution' : ui.campaign ? 'First Winter' : 'Sandbox'}
+          </span>
         </div>
         <div className="topbar-meta">
-          <span className="seed-tag">种子 {ui.seed}</span>
+          <span className="seed-tag">
+            {ui.civilization ? '256×256' : '64×64'} · 种子 {ui.seed}
+          </span>
           <span className="topbar-hint">拖动平移 · 双指 / 滚轮缩放 · 空格暂停</span>
         </div>
       </header>
       <div className="main">
         <div className="stage" ref={wrapRef}>
           <canvas ref={canvasRef} />
+          {ui.civilization && (
+            <>
+              <div className="city-map-heading">
+                <b>{ERAS[ui.civilization.era]}</b>
+                <span>
+                  {ui.pop} 人 · {ui.civilization.buildings} 座建筑
+                </span>
+              </div>
+              <div className="map-controls">
+                <button onClick={() => mapOverview(true)}>城市总览</button>
+                <button onClick={() => mapOverview(false)}>整片大陆</button>
+              </div>
+              <MiniMap
+                state={simRef.current!.state}
+                cam={camRef.current}
+                view={viewRef.current}
+                onNavigate={navigate}
+              />
+            </>
+          )}
           {(ui.paused || ui.blocked) && (
             <div className="pause-chip">{ui.blocked ? '等待决策' : '‖ 已暂停'}</div>
           )}
@@ -485,6 +559,9 @@ export default function App() {
           onLoad={doLoad}
           saveMsg={saveMsg}
           onReclaim={reclaim}
+          onConstruct={construct}
+          onAuto={toggleAuto}
+          onPriority={setPriority}
           onWorkforce={changeWorkforce}
           onBuild={build}
         />

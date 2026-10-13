@@ -1,13 +1,18 @@
+import CivilizationPanel from './CivilizationPanel'
+import type { CivilizationView, ConstructionKind } from '../sim/civilization'
 import SurvivalPanel from './SurvivalPanel'
 import { PROFESSION_LABEL, type Profession, type BuildingKind, type SurvivalView } from '../sim/survival'
 import { useState } from 'react'
 import type { HistoryPoint, JournalEntry, Stock, TaskKind } from '../sim/types'
 import type { ResourceType, Terrain } from '../sim/world'
-import { GRASS } from '../sim/world'
+import { TERRAIN_NAMES, GRASS } from '../sim/world'
 import type { Selection } from '../render/entities'
 import StatsChart, { SERIES } from './StatsChart'
 
 export interface SelectedVillagerInfo {
+  civicJob?: 'research' | 'industry' | 'mining'
+  sex?: 'female' | 'male'
+  pregnancyDays?: number | null
   profession?: Profession
   id: number
   name: string
@@ -29,6 +34,7 @@ export interface SelectedTileInfo {
 }
 
 export interface UiSnapshot {
+  civilization: CivilizationView | null
   campaign: SurvivalView | null
   blocked: boolean
   tick: number
@@ -57,9 +63,12 @@ export const TASK_LABEL: Record<TaskKind, string> = {
   deposit: '交粮',
   gather: '采集',
   build: '建设',
+  research: '研究',
+  industry: '工业生产',
+  mining: '采矿',
 }
 
-const TERRAIN_LABEL = ['草地', '森林', '水域', '石地', '农田']
+const TERRAIN_LABEL = TERRAIN_NAMES
 const RESOURCE_LABEL: Record<ResourceType, string> = { food: '食物', wood: '木材', stone: '石头' }
 
 function fmt(n: number): string {
@@ -79,7 +88,10 @@ interface Props {
   selection: Selection
   onTogglePause: () => void
   onSpeed: (n: number) => void
-  onReset: (seedText: string, mode?: 'survival' | 'sandbox') => void
+  onReset: (seedText: string, mode?: 'survival' | 'sandbox' | 'evolution') => void
+  onConstruct: (kind: ConstructionKind) => void
+  onAuto: () => void
+  onPriority: (priority: CivilizationView['priority']) => void
   onWorkforce: (farmers: number, builders: number) => void
   onBuild: (kind: BuildingKind) => void
   onGrant: (type: ResourceType) => void
@@ -102,6 +114,9 @@ export default function Sidebar({
   onLoad,
   saveMsg,
   onReclaim,
+  onConstruct,
+  onAuto,
+  onPriority,
   onWorkforce,
   onBuild,
 }: Props) {
@@ -132,7 +147,7 @@ export default function Sidebar({
             {ui.blocked ? '等待决策 / 结算' : ui.paused ? '▶ 开始' : '⏸ 暂停'}
           </button>
           <div className="segmented" role="group" aria-label="模拟速度">
-            {[1, 2, 5, 10, 20].map((n) => (
+            {(ui.civilization ? [1, 10, 20, 50, 100, 200] : [1, 2, 5, 10, 20]).map((n) => (
               <button key={n} className={`seg${ui.speed === n ? ' active' : ''}`} onClick={() => onSpeed(n)}>
                 {n}×
               </button>
@@ -146,10 +161,16 @@ export default function Sidebar({
             value={seedText}
             onChange={(e) => setSeedText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') onReset(seedText, ui.campaign ? 'survival' : 'sandbox')
+              if (e.key === 'Enter')
+                onReset(seedText, ui.civilization ? 'evolution' : ui.campaign ? 'survival' : 'sandbox')
             }}
           />
-          <button className="btn" onClick={() => onReset(seedText, ui.campaign ? 'survival' : 'sandbox')}>
+          <button
+            className="btn"
+            onClick={() =>
+              onReset(seedText, ui.civilization ? 'evolution' : ui.campaign ? 'survival' : 'sandbox')
+            }
+          >
             重新开始
           </button>
         </div>
@@ -165,15 +186,30 @@ export default function Sidebar({
       </section>
 
       <section className="panel mode-panel">
-        <button className="btn" onClick={() => onReset(seedText, ui.campaign ? 'sandbox' : 'survival')}>
-          {ui.campaign ? '新建自由沙盒' : '新建首年生存挑战'}
+        <button className="btn" onClick={() => onReset(seedText, 'evolution')}>
+          新建大陆文明演化
         </button>
-        <p className="hint">
-          {ui.campaign
-            ? '保存后再切换模式，避免覆盖当前进度。'
-            : '当前是自由沙盒。首年挑战加入季节、分工和决策。'}
-        </p>
+        <div className="mode-buttons">
+          <button className="btn" onClick={() => onReset(seedText, 'sandbox')}>
+            自由沙盒
+          </button>
+          <button className="btn" onClick={() => onReset(seedText, 'survival')}>
+            首年生存
+          </button>
+        </div>
+        <p className="hint">先保存，再新建。文明演化使用大地图与独立人口模型。</p>
       </section>
+      {ui.civilization && (
+        <CivilizationPanel
+          c={ui.civilization}
+          tick={ui.tick}
+          stock={ui.stock}
+          capacity={ui.capacity}
+          onBuild={onConstruct}
+          onAuto={onAuto}
+          onPriority={onPriority}
+        />
+      )}
       {ui.campaign && (
         <SurvivalPanel c={ui.campaign} blocked={ui.blocked} onWorkforce={onWorkforce} onBuild={onBuild} />
       )}

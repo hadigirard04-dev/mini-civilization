@@ -125,6 +125,67 @@ export function electricGrid(s: SimState) {
       : 0
   return { supply, demand, ratio: demand > 0 ? Math.min(1, supply / demand) : 1 }
 }
+export function housingCapacity(s: SimState): number {
+  return 20 + s.buildings.reduce(
+    (n, b) => n + (b.type === 'skyscraper' ? 20 : b.type === 'house' || !b.type ? HOUSE_CAPACITY[b.level ?? 0] : 0),
+    0,
+  )
+}
+
+/** 与每月迁入结算共用的规则；侧栏显示的是下次结算时按当前状态可迁入的人数。 */
+export function migrationForecast(s: SimState) {
+  const c = s.civilization!
+  const population = s.villagers.filter((v) => v.alive).length
+  const adults = s.villagers.filter((v) => v.alive && v.age >= 18).length
+  const capacity = housingCapacity(s)
+  const jobs = 20 + countCivic(s, 'farm') * 3 + countCivic(s, 'factory') * 30 +
+    countCivic(s, 'market') * 12 + countCivic(s, 'skyscraper') * 32
+  const gateway = c.era >= 1 && (c.era === 1 ? countCivic(s, 'granary') > 0 : countCivic(s, 'market') > 0)
+  const foodMinimum = Math.max(120, population * 5)
+  const limits = [
+    { label: '本月迁入上限', available: Math.min(20, Math.max(1, Math.ceil(population * 0.03))) },
+    { label: '空余住房', available: capacity - population },
+    { label: '空余岗位', available: jobs - adults },
+    { label: '安置口粮', available: Math.floor(s.stock.food / 20) },
+    { label: '外部人口池', available: c.migrationPool },
+    { label: '模拟人口上限', available: 1800 - population },
+  ]
+  const blockers = [] as string[]
+  if (!gateway) blockers.push(c.era < 1 ? '需进入农业聚落' : c.era === 1 ? '需建成粮仓' : '需建成集市')
+  if (s.stock.food <= foodMinimum) blockers.push(`口粮需超过 ${Math.floor(foodMinimum)}（当前 ${Math.floor(s.stock.food)}）`)
+  for (const limit of limits.slice(1)) if (limit.available <= 0) blockers.push(`${limit.label}不足`)
+  return {
+    nextDay: Math.ceil((s.tick + 1) / 1800) * 30,
+    count: blockers.length ? 0 : Math.max(0, Math.min(...limits.map((limit) => limit.available))),
+    blockers,
+    limits,
+    jobs,
+    adults,
+  }
+}
+
+export function developmentDiagnostics(s: SimState): string[] {
+  const c = s.civilization!
+  const notes: string[] = []
+  if (!c.autoBuild) notes.push('自主建设已暂停；需手动下达建设')
+  if (s.sites.length >= 4) notes.push('4 处工地正在施工，建成后才能继续规划')
+  const next = nextConstruction(s)
+  if (next && c.autoBuild && s.sites.length < 4) {
+    const cost = constructionCost(next)
+    const missing = [
+      ['木材', cost.wood - s.stock.wood],
+      ['石料', cost.stone - s.stock.stone],
+      ['钢材', cost.steel - c.steel],
+    ].filter(([, amount]) => Number(amount) > 0)
+    if (missing.length) notes.push(`下一项「${cost.name}」缺 ${missing.map(([name, amount]) => `${name} ${Math.ceil(Number(amount))}`).join('、')}`)
+  }
+  if (c.era < 4) {
+    const unmet = eraRequirements(s).filter((r) => !r.met)
+    if (unmet.length) notes.push(`时代条件待完成：${unmet.slice(0, 2).map((r) => `${r.label} ${Math.floor(r.value)}/${r.target}`).join('、')}`)
+  }
+  if (c.era >= 3 && electricGrid(s).ratio < 0.99) notes.push(`电力缺口 ${Math.ceil(electricGrid(s).demand - electricGrid(s).supply)}，工业与机械化农田受限`)
+  return notes.slice(0, 4)
+}
 export function eraRequirements(s: SimState) {
   const c = s.civilization!
   const population = s.villagers.filter((v) => v.alive).length
@@ -228,6 +289,8 @@ export function civilizationView(s: SimState) {
     buildings: s.buildings.length,
     roadTiles: c.roads.filter(Boolean).length,
     population: s.villagers.filter((v) => v.alive).length,
+    migration: migrationForecast(s),
+    diagnostics: developmentDiagnostics(s),
     demographics: {
       children: s.villagers.filter((v) => v.alive && v.age < 18).length,
       adults: s.villagers.filter((v) => v.alive && v.age >= 18 && v.age < 65).length,

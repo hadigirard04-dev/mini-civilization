@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Simulation } from '../src/sim/simulation'
-import { CIVIC_YEAR_TICKS, createCivilization, electricGrid, countCivic } from '../src/sim/civilization'
+import { CIVIC_YEAR_TICKS, createCivilization, electricGrid, countCivic, migrationForecast, developmentDiagnostics } from '../src/sim/civilization'
 import { deserialize, serialize, saveTo, loadFrom } from '../src/sim/save'
 import { findPath } from '../src/sim/path'
 import { generateWorld, MOUNTAIN } from '../src/sim/world'
@@ -89,6 +89,39 @@ describe('大陆与文明', () => {
     s.tick = 5399
     sim.tick()
     expect(c.immigrants).toBe(1)
+  })
+  it('迁入预测与月末真实结算相同，并指出当前的住房/口粮瓶颈', () => {
+    const sim = new Simulation(42, 'evolution'), s = sim.state, c = s.civilization!
+    c.era = 1
+    c.autoBuild = false
+    s.buildings.push({ id: 991, x: 131, y: 132, type: 'granary', level: 1 })
+    s.stock.food = 1000
+    expect(migrationForecast(s).blockers).toContain('空余岗位不足')
+    for (let i = 0; i < 4; i++) s.world.tiles[120 * 256 + 120 + i] = { terrain: 4, resource: 60, max: 60 }
+    s.worldVersion++
+    s.tick = 1799
+    const predicted = migrationForecast(s).count
+    expect(predicted).toBe(1)
+    sim.tick()
+    expect(c.immigrants).toBe(predicted)
+    s.stock.food = 0
+    expect(migrationForecast(s).blockers.some((reason) => reason.includes('口粮'))).toBe(true)
+    expect(developmentDiagnostics(s).some((reason) => reason.includes('自主建设已暂停'))).toBe(true)
+  })
+  it('城市按用途分区：住房靠内、农田在外、工业更远', () => {
+    const sim = new Simulation(42, 'evolution'), s = sim.state, c = s.civilization!
+    c.autoBuild = false
+    c.era = 3
+    s.stock.wood = 1000
+    s.stock.stone = 1000
+    const center = s.world.size / 2
+    const distance = (x: number, y: number) => Math.hypot(x - center, y - center)
+    expect(sim.orderCivic('house')).toBe(true)
+    expect(sim.orderCivic('farm')).toBe(true)
+    expect(sim.orderCivic('factory')).toBe(true)
+    const [house, farm, factory] = s.sites
+    expect(distance(house.x, house.y)).toBeLessThan(distance(farm.x, farm.y))
+    expect(distance(farm.x, farm.y)).toBeLessThan(distance(factory.x, factory.y))
   })
   it('挂机天数不会直接升级时代；需要建成条件', () => {
     const sim = new Simulation(42, 'evolution'),

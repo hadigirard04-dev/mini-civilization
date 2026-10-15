@@ -1,11 +1,12 @@
 import {
   createCivilization,
   ERAS,
-  HOUSE_CAPACITY,
   countCivic,
   electricGrid,
   eraRequirements,
   nextConstruction,
+  migrationForecast,
+  housingCapacity,
   constructionCost,
   constructionName,
   CIVIC_YEAR_TICKS,
@@ -882,16 +883,7 @@ export class Simulation {
 
   /** 村庄人口容量 = 基础 20 + 每座住房 4 */
   get capacity(): number {
-    if (this.state.civilization)
-      return (
-        20 +
-        this.state.buildings.reduce(
-          (n, b) =>
-            n +
-            (b.type === 'skyscraper' ? 20 : b.type === 'house' || !b.type ? HOUSE_CAPACITY[b.level ?? 0] : 0),
-          0,
-        )
-      )
+    if (this.state.civilization) return housingCapacity(this.state)
     return PARAMS.baseCapacity + PARAMS.capacityPerHouse * buildingCount(this.state, 'house')
   }
 
@@ -918,15 +910,37 @@ export class Simulation {
     s.sites.push({ id: s.nextId++, x: spot.x, y: spot.y, progress: 0, builderId: null, type: 'house' })
   }
 
-  /** 由内向外环搜一块未被占用的草地（中央广场保留不建） */
-  private findBuildSpot(): { x: number; y: number } | null {
+  /** 按用途选址：市中心住房加密，农田和工业落在外圈；旧沙盒仍从中心扩建。 */
+  private findBuildSpot(kind: ConstructionKind = 'house'): { x: number; y: number } | null {
     const s = this.state
     const w = s.world
     const mid = Math.floor(w.size / 2)
     const cx = w.size / 2
     const cy = w.size / 2
     const occupied = new Set([...s.sites, ...s.buildings].map((b) => b.y * w.size + b.x))
-    for (let r = 2; r <= (s.civilization ? Math.min(100, w.size / 2 - 2) : 16); r++) {
+    const civic = !!s.civilization
+    const urban = s.buildings.filter((b) => !['farmhouse', 'quarry', 'factory', 'powerplant'].includes(b.type ?? '')).length
+    const spread = Math.max(3, Math.sqrt(urban) * 1.25)
+    const agricultural = kind === 'farm' || kind === 'farmhouse' || kind === 'granary'
+    const industrial = kind === 'quarry' || kind === 'factory' || kind === 'powerplant'
+    const target = agricultural ? spread + 5 : industrial ? spread + 9 : kind === 'skyscraper' ? spread * 0.45 : spread * 0.7
+    const limit = civic ? Math.min(100, w.size / 2 - 2) : 16
+    const district = new Map<number, { total: number; homes: number; industry: number; farms: number }>()
+    if (civic) for (const b of s.buildings) {
+      for (let yy = Math.max(1, b.y - 4); yy <= Math.min(w.size - 2, b.y + 4); yy++) {
+        for (let xx = Math.max(1, b.x - 4); xx <= Math.min(w.size - 2, b.x + 4); xx++) {
+          const key = yy * w.size + xx
+          const density = district.get(key) ?? { total: 0, homes: 0, industry: 0, farms: 0 }
+          density.total++
+          if (b.type === 'house' || b.type === 'skyscraper') density.homes++
+          if (['quarry', 'factory', 'powerplant'].includes(b.type ?? '')) density.industry++
+          if (b.type === 'farmhouse') density.farms++
+          district.set(key, density)
+        }
+      }
+    }
+    const candidates: Array<{ x: number; y: number; score: number }> = []
+    for (let r = 2; r <= (civic ? Math.min(limit, Math.ceil(target + 9)) : limit); r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
@@ -934,15 +948,42 @@ export class Simulation {
           const y = mid + dy
           if (x < 1 || y < 1 || x >= w.size - 1 || y >= w.size - 1) continue
           const terrain = w.tiles[y * w.size + x].terrain
-          if (s.civilization ? ![GRASS, FOREST, STONE, 5, 6, 7, 8].includes(terrain) : terrain !== GRASS)
+          if (civic ? ![GRASS, FOREST, STONE, 5, 6, 7, 8].includes(terrain) : terrain !== GRASS)
             continue
-          if (s.civilization && (x % 4 === 0 || y % 4 === 0)) continue
+          if (civic && (x % 4 === 0 || y % 4 === 0)) continue
           // 中央广场保留（交粮与活动空间）
           if (Math.abs(x + 0.5 - cx) <= 2.4 && Math.abs(y + 0.5 - cy) <= 2.4) continue
           if (occupied.has(y * w.size + x)) continue
-          if (!findPath(w, cx, cy, x, y)) continue
-          return { x, y }
+          if (!civic) {
+            if (findPath(w, cx, cy, x, y)) return { x, y }
+            continue
+          }
+          const density = district.get(y * w.size + x) ?? { total: 0, homes: 0, industry: 0, farms: 0 }
+          const road = s.civilization!.roads[y * w.size + x]
+          const score =
+            -Math.abs(r - target) * 3 +
+            Math.min(5, density.total) * (agricultural || industrial ? 0.1 : 0.7) +
+            (agricultural ? density.farms * 0.8 - density.homes * 2 : industrial ? -density.homes * 3 : density.homes * 1.5 - density.industry * 3) +
+            (road ? 1.5 : 0) -
+            (terrain === GRASS ? 0 : 1) -
+            (x + y) * 0.00001
+          candidates.push({ x, y, score })
         }
+      }
+    }
+    candidates.sort((a, b) => b.score - a.score)
+    // 优选地块不通时逐步退让；地形隔断不应使整个文明停止建设。
+    for (const spot of candidates) {
+      if (findPath(w, cx, cy, spot.x, spot.y)) return { x: spot.x, y: spot.y }
+    }
+    if (civic) for (let r = Math.ceil(target + 10); r <= limit; r++) {
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
+        const x = mid + dx, y = mid + dy
+        if (x < 1 || y < 1 || x >= w.size - 1 || y >= w.size - 1 || x % 4 === 0 || y % 4 === 0) continue
+        const terrain = w.tiles[y * w.size + x].terrain
+        if (![GRASS, FOREST, STONE, 5, 6, 7, 8].includes(terrain) || occupied.has(y * w.size + x)) continue
+        if (findPath(w, cx, cy, x, y)) return { x, y }
       }
     }
     return null
@@ -1002,7 +1043,7 @@ export class Simulation {
             x: site.x,
             y: site.y,
             type: site.type ?? 'house',
-            ...(s.civilization ? { level: s.civilization.era } : {}),
+            ...(s.civilization ? { level: site.type === 'house' ? Math.min(2, s.civilization.era) : s.civilization.era } : {}),
           })
         if (s.civilization) this.connectRoad(site.x, site.y)
         if (s.campaign) this.log('milestone', `${constructionName(site.type ?? 'house')}落成`)
@@ -1021,7 +1062,7 @@ export class Simulation {
     for (const t of s.world.tiles) if (t.terrain === FARMLAND) farms++
     if (farms >= PARAMS.farmCap) return
     if (s.stock.wood < PARAMS.farmAutoWood) return
-    const spot = this.findBuildSpot()
+    const spot = this.findBuildSpot('farm')
     if (!spot) return
     s.stock.wood -= PARAMS.farmWoodCost
     s.consumed.wood += PARAMS.farmWoodCost
@@ -1155,7 +1196,7 @@ export class Simulation {
     if (c.era < cost.era) return false
     const steel = cost.steel
     if (s.stock.wood < cost.wood || s.stock.stone < cost.stone || c.steel < steel) return false
-    const spot = this.findBuildSpot()
+    const spot = this.findBuildSpot(kind)
     if (!spot) return false
     s.stock.wood -= cost.wood
     s.stock.stone -= cost.stone
@@ -1248,6 +1289,26 @@ export class Simulation {
     }
   }
 
+  private maybeUpgradeCentralHouse(): void {
+    const s = this.state,
+      c = s.civilization!
+    if (c.era < 2 || s.sites.length >= 4 || s.stock.wood < 20 || s.stock.stone < 25 ||
+        (c.era >= 4 && c.steel < 10)) return
+    const center = s.world.size / 2
+    const old = s.buildings
+      .filter((b) => b.type === 'house' && (b.level ?? 0) < c.era &&
+        !s.sites.some((site) => site.upgradeId === b.id))
+      .sort((a, b) => Math.hypot(a.x - center, a.y - center) - Math.hypot(b.x - center, b.y - center))[0]
+    if (!old) return
+    s.stock.wood -= 20
+    s.stock.stone -= 25
+    s.consumed.wood += 20
+    s.consumed.stone += 25
+    if (c.era >= 4) c.steel -= 10
+    s.sites.push({ id: s.nextId++, x: old.x, y: old.y, type: 'house', upgradeId: old.id,
+      progress: 0, builderId: null })
+  }
+
   private updateCivilization(): void {
     const s = this.state,
       c = s.civilization!
@@ -1262,30 +1323,7 @@ export class Simulation {
       if (c.autoBuild) {
         const next = nextConstruction(s)
         if (next) this.orderCivic(next)
-        else if (s.sites.length < 4) {
-          const old = s.buildings.find(
-            (b) =>
-              b.type === 'house' &&
-              (b.level ?? 0) < c.era &&
-              !s.sites.some((site) => site.upgradeId === b.id),
-          )
-          if (old && s.stock.wood >= 20 && s.stock.stone >= 25 && (c.era < 4 || c.steel >= 10)) {
-            s.stock.wood -= 20
-            s.stock.stone -= 25
-            s.consumed.wood += 20
-            s.consumed.stone += 25
-            if (c.era >= 4) c.steel -= 10
-            s.sites.push({
-              id: s.nextId++,
-              x: old.x,
-              y: old.y,
-              type: 'house',
-              upgradeId: old.id,
-              progress: 0,
-              builderId: null,
-            })
-          }
-        }
+        if (s.tick % (5 * 60) === 0) this.maybeUpgradeCentralHouse()
       }
     }
     if (s.tick % 300 === 0) {
@@ -1314,30 +1352,8 @@ export class Simulation {
         })
     }
     // 迁移每月结算：有人愿意来，还须有岗位、住房和安置口粮；外部人口池有限。
-    if (
-      c.era >= 1 &&
-      s.tick % 1800 === 0 &&
-      (c.era === 1 ? countCivic(s, 'granary') > 0 : countCivic(s, 'market') > 0) &&
-      s.stock.food > Math.max(120, this.aliveCount() * 5)
-    ) {
-      const jobs =
-        20 +
-        countCivic(s, 'farm') * 3 +
-        countCivic(s, 'factory') * 30 +
-        countCivic(s, 'market') * 12 +
-        countCivic(s, 'skyscraper') * 32
-      const count = Math.max(
-        0,
-        Math.min(
-          Math.max(1, Math.ceil(this.aliveCount() * 0.03)),
-          20,
-          this.capacity - this.aliveCount(),
-          1800 - this.aliveCount(),
-          c.migrationPool,
-          jobs - adults.length,
-          Math.floor(s.stock.food / 20),
-        ),
-      )
+    if (s.tick % 1800 === 0) {
+      const count = migrationForecast(s).count
       for (let i = 0; i < count; i++) {
         const person = makeVillager(s.nextId++, s.world.size / 2, s.world.size / 2, this.rng, s.world)
         this.initializeDemographics(person)

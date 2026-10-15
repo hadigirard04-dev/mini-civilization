@@ -84,6 +84,14 @@ body {
   gap: 16px;
 }
 
+.development-diagnostics {
+  color: var(--amber);
+  padding-left: 20px;
+  margin: 6px 0 14px;
+  font-size: 12px;
+}
+.development-diagnostics li { margin: 4px 0; }
+
 .seed-tag {
   font-size: 12px;
   color: var(--ink-dim);

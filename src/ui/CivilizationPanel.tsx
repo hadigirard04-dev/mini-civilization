@@ -66,7 +66,7 @@ export default function CivilizationPanel({ c, tick, stock, capacity, onBuild, o
           <p className="hint">现代阶段已开启。继续扩建住宅、服务设施与电站，吸引人口，形成更大的城区。</p>
         )}
         <p className="hint">
-          256 × 256 大陆；时代由知识、人口和已建成设施解锁。旧住宅会施工升级，城区持续向外扩展。
+          256 × 256 大陆；中心优先建住宅和高楼，农业、工业落在外圈。旧住宅优先从中心改建。
         </p>
       </section>
       <section className="panel">
@@ -89,12 +89,27 @@ export default function CivilizationPanel({ c, tick, stock, capacity, onBuild, o
           未成年 {c.demographics.children} · 成年 {c.demographics.adults} · 老年 {c.demographics.elderly}
         </p>
         <p className="hint">
-          游戏历一年 365 天；18 岁成年。妊娠 270 天，产后间隔至少 2 年。迁入每 30
-          天检查岗位、住房与口粮，区域迁入人口池剩余 {c.migrationPool} 人。
+          模拟历一年 365 天；18 岁成年，妊娠 270 天，产后间隔至少 2 年。五时代按设施与知识快速解锁，是压缩的游戏进程，不代表真实文明只用了几年。
         </p>
+        <h3 className="next-era">下次迁入评估 · 第 {c.migration.nextDay} 天</h3>
+        <p className="hint">按当前条件预计迁入 <b>{c.migration.count}</b> 人；外部人口池 {c.migrationPool} 人。迁入时扣每人 20 粮。</p>
+        <div className="era-requirements">
+          {c.migration.limits.map((limit) => (
+            <span className={limit.available > 0 ? 'met' : ''} key={limit.label}>
+              {limit.label} {Math.max(0, Math.floor(limit.available))}
+            </span>
+          ))}
+        </div>
+        {c.migration.blockers.length > 0 && <p className="hint">当前阻碍：{c.migration.blockers.join('；')}</p>}
       </section>
       <section className="panel">
         <h2 className="panel-title">城市发展</h2>
+        <h3 className="next-era">当前发展条件</h3>
+        {c.diagnostics.length > 0 ? (
+          <ul className="development-diagnostics">
+            {c.diagnostics.map((note) => <li key={note}>{note}</li>)}
+          </ul>
+        ) : <p className="hint">当前没有检测到建设材料、工地或电力硬性限制。</p>}
         <button className="btn auto-build" onClick={onAuto}>
           {c.autoBuild ? '✓ 自主建设开启' : '自主建设已暂停'}
         </button>

@@ -50,8 +50,12 @@ export default function MiniMap({
     }
     ctx.imageSmoothingEnabled = false
     ctx.drawImage(cache.current.canvas, 0, 0, 128, 128)
-    ctx.fillStyle = '#f8d881'
-    for (const b of state.buildings) ctx.fillRect((b.x / size) * 128, (b.y / size) * 128, 2, 2)
+    for (const b of state.buildings) {
+      ctx.fillStyle = b.type === 'skyscraper' || (b.type === 'house' && (b.level ?? 0) >= 4)
+        ? '#b6d9eb' : ['factory', 'quarry', 'powerplant'].includes(b.type ?? '')
+          ? '#777c85' : b.type === 'house' ? '#f8d881' : '#d3ac6a'
+      ctx.fillRect((b.x / size) * 128, (b.y / size) * 128, 2, 2)
+    }
     ctx.strokeStyle = '#fff'
     ctx.lineWidth = 1
     const scale = 128 / size,
@@ -61,7 +65,7 @@ export default function MiniMap({
   })
   return (
     <div className="mini-map">
-      <span>大陆 · 点按定位</span>
+      <span>大陆 · 浅蓝市中心 / 黄住宅 / 灰工业 · 点按定位</span>
       <canvas
         width={128}
         height={128}

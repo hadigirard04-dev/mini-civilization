@@ -45,6 +45,14 @@ it.skipIf(process.env.CIVILIZATION_LONG !== '1')(
     expect(countCivic(s, 'quarry')).toBeGreaterThanOrEqual(2)
     expect(s.civilization!.oreReserve).toBeLessThan(60000)
     expect(s.civilization!.roads.filter(Boolean).length).toBeGreaterThan(100)
+    const center = s.world.size / 2
+    const averageRadius = (types: string[]) => {
+      const buildings = s.buildings.filter((b) => types.includes(b.type ?? 'house'))
+      return buildings.reduce((sum, b) => sum + Math.hypot(b.x - center, b.y - center), 0) / buildings.length
+    }
+    expect(averageRadius(['farmhouse', 'granary'])).toBeGreaterThan(averageRadius(['house', 'skyscraper']))
+    expect(averageRadius(['factory', 'powerplant', 'quarry'])).toBeGreaterThan(averageRadius(['house', 'skyscraper']))
+    expect(s.buildings.some((b) => b.type === 'house' && (b.level ?? 0) >= 3)).toBe(true)
     const json = serialize(sim)
     expect(deserialize(json)!.state).toEqual(s)
     expect(Buffer.byteLength(json) * 2).toBeLessThan(5000000)

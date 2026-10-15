@@ -1,7 +1,7 @@
-import { drawCivicBuilding } from './city'
-import { constructionName } from '../sim/civilization'
+import { buildingHeight, drawCivicBuilding } from './city'
+import { constructionName, electricGrid } from '../sim/civilization'
 import { PROFESSION_LABEL, seasonAt } from '../sim/survival'
-import type { SimState, Villager } from '../sim/types'
+import type { Building, SimState, Villager } from '../sim/types'
 import { TILE, worldToScreen, type Camera } from './camera'
 import type { View } from './draw'
 
@@ -166,9 +166,18 @@ function drawSite(
   y: number,
   progress: number,
   timeMs: number,
+  upgrading = false,
 ): void {
   const px = x * TILE
   const py = y * TILE
+  if (upgrading) {
+    ctx.fillStyle = '#dbb45a'
+    ctx.fillRect(px + 18, py - 54, 2, 68)
+    ctx.fillRect(px - 8, py - 54, 32, 2)
+    ctx.fillStyle = '#a58b53'
+    ctx.fillRect(px - 6, py - 52, 1, 18)
+    ctx.fillRect(px - 8, py - 35, 5, 3)
+  }
   // 地基木板
   ctx.fillStyle = '#7a5c3a'
   ctx.fillRect(px + 1, py + 5, 14, 2)
@@ -268,7 +277,7 @@ function drawLabels(
       '山地',
     ]
     const building = state.buildings.find((b) => b.x === selection.x && b.y === selection.y)
-    const label = `(${selection.x}, ${selection.y}) ${building ? constructionName(building.type ?? 'house') : names[t.terrain]}`
+    const label = `(${selection.x}, ${selection.y}) ${building ? building.type === 'campfire' && (state.civilization?.era ?? 0) >= 2 ? '城市中心广场' : constructionName(building.type ?? 'house') : names[t.terrain]}`
     ctx.fillStyle = 'rgba(10, 13, 9, 0.85)'
     const w = ctx.measureText(label).width + 10
     ctx.fillRect(s.x - w / 2, s.y - 16, w, 16)
@@ -302,19 +311,31 @@ function drawRoads(ctx: CanvasRenderingContext2D, state: SimState, cam: Camera, 
       const i = y * size + x,
         road = state.civilization?.roads[i]
       if (road) {
+        const era = state.civilization!.era
+        const px = x * TILE, py = y * TILE
         ctx.fillStyle =
-          state.civilization!.era >= 3 ? '#4f5960' : state.civilization!.era >= 2 ? '#a69f88' : '#ac936c'
-        ctx.fillRect(x * TILE, y * TILE, 16, 16)
-        if (state.civilization!.era >= 3 && cam.zoom > 0.3) {
+          era >= 3 ? '#aab0a6' : era >= 2 ? '#c6b99b' : '#ac936c'
+        ctx.fillRect(px + 2, py + 2, 12, 12)
+        const color = era >= 3 ? '#4c5b62' : era >= 2 ? '#a59d83' : '#a58d60'
+        ctx.fillStyle = color
+        const width = era >= 3 ? 8 : 6, inset = (16 - width) / 2
+        ctx.fillRect(px + inset, py + inset, width, width)
+        if (y > 0 && state.civilization!.roads[i - size]) ctx.fillRect(px + inset, py, width, 8)
+        if (y < size - 1 && state.civilization!.roads[i + size]) ctx.fillRect(px + inset, py + 8, width, 8)
+        if (x > 0 && state.civilization!.roads[i - 1]) ctx.fillRect(px, py + inset, 8, width)
+        if (x < size - 1 && state.civilization!.roads[i + 1]) ctx.fillRect(px + 8, py + inset, 8, width)
+        if (era >= 3 && cam.zoom > 0.5) {
           ctx.fillStyle = '#ccb86b'
           ctx.fillRect(x * TILE + 7, y * TILE + 6, 1, 3)
         }
-      } else if (walk[i] >= ROAD_MIN && w.tiles[i].terrain !== 2) {
+      } else if (cam.zoom >= 0.35 && walk[i] >= ROAD_MIN && w.tiles[i].terrain !== 2) {
         ctx.fillStyle = 'rgba(124,96,58,.44)'
         ctx.fillRect(x * TILE + 3, y * TILE + 3, TILE - 6, TILE - 6)
       }
     }
 }
+
+const buildingOrder = new WeakMap<SimState, { source: Building[]; count: number; sorted: Building[]; indoors: Set<number> }>()
 
 /** 实体层：土路 → 交粮点 → 住房/工地 → 尸体 → 居民 → 选中高亮 → 屏幕标签 */
 export function drawEntities(
@@ -325,6 +346,9 @@ export function drawEntities(
   timeMs: number,
   selection: Selection,
 ): void {
+  const halfW = view.w / (TILE * cam.zoom) / 2, halfH = view.h / (TILE * cam.zoom) / 2
+  const visible = (x: number, y: number, rise = 1) => x >= cam.x - halfW - 2 && x <= cam.x + halfW + 2 &&
+    y >= cam.y - halfH - 2 && y <= cam.y + halfH + rise
   if (state.campaign) {
     const season = seasonAt(state.tick)
     const tint = [
@@ -346,9 +370,37 @@ export function drawEntities(
   }
   drawRoads(ctx, state, cam, view)
   drawStockpile(ctx, state)
-  for (const b of [...state.buildings].sort((a, b) => a.y - b.y)) {
+  let order = buildingOrder.get(state)
+  if (!order || order.source !== state.buildings || order.count !== state.buildings.length) {
+    order = { source: state.buildings, count: state.buildings.length,
+      sorted: [...state.buildings].sort((a, b) => a.y - b.y),
+      indoors: new Set(state.buildings.filter((b) => ['house', 'skyscraper', 'school', 'factory'].includes(b.type ?? 'house'))
+        .map((b) => b.y * state.world.size + b.x)) }
+    buildingOrder.set(state, order)
+  }
+  const power = state.civilization ? electricGrid(state).ratio : 1
+  const dots = cam.zoom < 0.65
+  const stride = dots ? Math.max(1, Math.ceil(state.villagers.length / 300)) : 1
+  const people = state.villagers.filter((v) => {
+    if (!v.alive || !visible(v.x, v.y)) return false
+    if (selection?.kind === 'villager' && selection.id === v.id) return true
+    // 已进入住宅休息或在设施内工作的居民仍参与模拟，画面不把他们叠在屋顶上。
+    if (v.path.length === 0 && order!.indoors.has(Math.floor(v.y) * state.world.size + Math.floor(v.x)) &&
+      ((v.task === 'rest' && !v.sleepInPlace) || v.task === 'research' || v.task === 'industry')) return false
+    return !dots || v.id % stride === 0
+  }).sort((a, b) => a.y - b.y)
+  const drawPerson = (v: Villager) => {
+    if (dots && !(selection?.kind === 'villager' && selection.id === v.id)) {
+      ctx.fillStyle = '#f5d998'
+      ctx.fillRect(v.x * TILE, v.y * TILE, 2, 2)
+    } else drawVillager(ctx, v, timeMs, state.tick)
+  }
+  let person = 0
+  for (const b of order.sorted) {
+    if (!visible(b.x, b.y, buildingHeight(b) / TILE + 2)) continue
+    while (person < people.length && people[person].y <= b.y + 0.8) drawPerson(people[person++])
     if (state.civilization) {
-      drawCivicBuilding(ctx, b, state, timeMs)
+      drawCivicBuilding(ctx, b, state, timeMs, cam.zoom >= 0.55, power)
       continue
     }
     drawHouse(ctx, b.x, b.y)
@@ -368,12 +420,10 @@ export function drawEntities(
       }
     }
   }
-  for (const s of state.sites) drawSite(ctx, s.x, s.y, s.progress, timeMs)
+  while (person < people.length) drawPerson(people[person++])
+  for (const s of state.sites) if (visible(s.x, s.y, 5)) drawSite(ctx, s.x, s.y, s.progress, timeMs, s.upgradeId !== undefined)
   for (const v of state.villagers) {
-    if (!v.alive) drawGrave(ctx, v)
-  }
-  for (const v of state.villagers) {
-    if (v.alive) drawVillager(ctx, v, timeMs, state.tick)
+    if (!v.alive && visible(v.x, v.y)) drawGrave(ctx, v)
   }
 
   // 选中高亮

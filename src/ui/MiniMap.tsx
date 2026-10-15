@@ -65,7 +65,7 @@ export default function MiniMap({
   })
   return (
     <div className="mini-map">
-      <span>大陆 · 浅蓝市中心 / 黄住宅 / 灰工业 · 点按定位</span>
+      <span>大陆 · 点按定位</span>
       <canvas
         width={128}
         height={128}
@@ -79,6 +79,7 @@ export default function MiniMap({
           )
         }}
       />
+      <small>浅蓝城芯 · 黄住宅 · 灰工业</small>
     </div>
   )
 }

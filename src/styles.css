@@ -1134,6 +1134,24 @@ input:focus-visible {
   font-size: 11px;
   color: #b4c9bc;
 }
+.city-map-heading small {
+  display: block;
+  color: #99b8aa;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  margin-top: 3px;
+}
+.map-controls button.active {
+  border-color: #dec77b;
+  color: #f5dfa1;
+  background: #364c35f0;
+}
+.mini-map small {
+  display: block;
+  max-width: 108px;
+  font-size: 8px;
+  color: #b9c9bb;
+}
 .map-controls {
   position: absolute;
   bottom: 14px;
@@ -1192,6 +1210,9 @@ input:focus-visible {
     right: 10px;
     top: 12px;
   }
+  .mini-map small { max-width: 82px; }
+  .map-controls { left: 10px; bottom: 10px; gap: 5px; }
+  .map-controls button { font-size: 12px; padding: 0 9px; }
   .brand-sub {
     display: none;
   }

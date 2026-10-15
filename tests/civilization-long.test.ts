@@ -10,8 +10,11 @@ it.skipIf(process.env.CIVILIZATION_LONG !== '1')(
     const sim = new Simulation(42, 'evolution'),
       s = sim.state
     const days = Number(process.env.CIVILIZATION_DAYS ?? 4000)
+    if (process.env.CIVILIZATION_SNAPSHOT_DIR) writeFileSync(`${process.env.CIVILIZATION_SNAPSHOT_DIR}/day-0.json`, serialize(sim))
     for (let i = 0; i < days * 60; i++) {
       sim.tick()
+      if (process.env.CIVILIZATION_SNAPSHOT_DIR && [500 * 60, 2000 * 60, 4000 * 60].includes(s.tick))
+        writeFileSync(`${process.env.CIVILIZATION_SNAPSHOT_DIR}/day-${s.tick / 60}.json`, serialize(sim))
       if (s.tick % 12000 === 0) {
         const population = s.villagers.filter((v) => v.alive).length
         expect(population).toBe(20 + s.births + s.civilization!.immigrants - s.deaths)

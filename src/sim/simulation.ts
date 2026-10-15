@@ -223,6 +223,7 @@ export class Simulation {
   speed = 1
   readonly tickRate = 10
   private acc = 0
+  private lastAdvanceSpeed = 1
   private populationTick = -1
   private populationCount = 0
   private gridRatio = 1
@@ -234,6 +235,10 @@ export class Simulation {
   }
   private occupied = new Set<number>()
   private occupiedVersion = -1
+  private facilitySource: Building[] | null = null
+  private facilityCount = -1
+  private depots: Building[] = []
+  private homes: Building[] = []
   private rng: Rng
 
   constructor(seedOrState: number | SimState, mode: 'sandbox' | 'survival' | 'evolution' = 'sandbox') {
@@ -278,13 +283,20 @@ export class Simulation {
   }
 
   /** 按真实时间推进（内部换算成 tick），暂停时不动 */
-  advance(dtSeconds: number): void {
+  advance(dtSeconds: number, budgetMs = Infinity): void {
     if (this.paused || this.blocked) return
+    if (this.speed !== this.lastAdvanceSpeed) {
+      this.acc = 0
+      this.lastAdvanceSpeed = this.speed
+    }
     this.acc += dtSeconds * this.speed
+    // 交互模式最多保留 250ms 的追赶量；设备跟不上时降低实速，避免积压后长时间抢占界面。
+    if (Number.isFinite(budgetMs)) this.acc = Math.min(this.acc, this.speed * 0.25)
     const step = 1 / this.tickRate
+    const started = Number.isFinite(budgetMs) ? performance.now() : 0
     let guard = 0
-    while (this.acc >= step) {
-      this.acc -= step
+    while (this.acc + 1e-9 >= step) {
+      this.acc = Math.max(0, this.acc - step)
       this.tick()
       if (this.blocked) {
         this.acc = 0
@@ -294,6 +306,7 @@ export class Simulation {
         this.acc = 0
         break
       }
+      if (Number.isFinite(budgetMs) && performance.now() - started >= budgetMs) break
     }
   }
 
@@ -771,11 +784,16 @@ export class Simulation {
   private actDeposit(v: Villager): void {
     const s = this.state
     const w = s.world
-    const depot = s.civilization
-      ? s.buildings
-          .filter((b) => b.type === 'market' || b.type === 'granary')
-          .sort((a, b) => Math.hypot(a.x - v.x, a.y - v.y) - Math.hypot(b.x - v.x, b.y - v.y))[0]
-      : null
+    this.refreshFacilities()
+    let depot: Building | null = null
+    let nearest = Infinity
+    if (s.civilization) for (const b of this.depots) {
+      const distance = (b.x - v.x) ** 2 + (b.y - v.y) ** 2
+      if (distance < nearest) {
+        nearest = distance
+        depot = b
+      }
+    }
     const cx = depot ? depot.x + 0.5 : w.size / 2
     const cy = depot ? depot.y + 0.5 : w.size / 2
 
@@ -849,12 +867,20 @@ export class Simulation {
     v.stamina = Math.min(100, v.stamina)
   }
 
+  private refreshFacilities(): void {
+    const buildings = this.state.buildings
+    if (this.facilitySource === buildings && this.facilityCount === buildings.length) return
+    this.facilitySource = buildings
+    this.facilityCount = buildings.length
+    this.depots = buildings.filter((b) => b.type === 'market' || b.type === 'granary')
+    this.homes = buildings.filter((b) => !b.type || b.type === 'house')
+  }
+
   private nearestBuilding(v: Villager): { x: number; y: number } | null {
-    const buildings = this.state.buildings.filter((b) => !b.type || b.type === 'house')
-    if (buildings.length === 0) return null
+    this.refreshFacilities()
     let best: { x: number; y: number } | null = null
     let bestD = Infinity
-    for (const b of buildings) {
+    for (const b of this.homes) {
       const d = Math.abs(b.x + 0.5 - v.x) + Math.abs(b.y + 0.5 - v.y)
       if (d < bestD) {
         bestD = d

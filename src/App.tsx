@@ -3,7 +3,7 @@ import MiniMap from './ui/MiniMap'
 import { buildingCount, survivalView, SEASONS, type BuildingKind } from './sim/survival'
 import { CampaignDialog } from './ui/SurvivalPanel'
 import { useEffect, useRef, useState } from 'react'
-import { clampCamera, screenToWorld, TILE, type Camera } from './render/camera'
+import { clampCamera, frameSettlement, screenToWorld, TILE, type Camera } from './render/camera'
 import { render, type View } from './render/draw'
 import { drawEntities, type Selection } from './render/entities'
 import { buildTerrainCanvas, patchTerrainCanvas } from './render/terrain'
@@ -101,6 +101,8 @@ export default function App() {
   const terrainRef = useRef<HTMLCanvasElement | null>(null)
   const selectionRef = useRef<Selection>(null)
   const worldVersionRef = useRef(0)
+  const followRef = useRef(!!simRef.current!.state.civilization)
+  const followTargetRef = useRef<{ key: string; camera: Camera } | null>(null)
 
   if (import.meta.env.DEV) {
     ;(window as unknown as Record<string, unknown>).__miniCiv = { simRef, camRef, selectionRef }
@@ -110,6 +112,8 @@ export default function App() {
   const [selection, setSelection] = useState<Selection>(null)
   const [saveMsg, setSaveMsg] = useState('')
   const [ui, setUi] = useState<UiSnapshot>(() => makeSnapshot(simRef.current!, null))
+  const [following, setFollowing] = useState(followRef.current)
+  const [runtime, setRuntime] = useState({ fps: 0, speed: 0 })
 
   useEffect(() => {
     selectionRef.current = selection
@@ -147,6 +151,7 @@ export default function App() {
   useEffect(() => {
     let raf = 0
     let last = performance.now()
+    let sampledAt = last, frames = 0, sampledTick = simRef.current!.state.tick
     const loop = (time: number) => {
       const dt = Math.min(0.25, (time - last) / 1000)
       last = time
@@ -155,10 +160,30 @@ export default function App() {
       const canvas = canvasRef.current
       const ctx = canvas?.getContext('2d')
       if (sim && terrain && canvas && ctx && viewRef.current.w > 0) {
-        sim.advance(dt)
+        sim.advance(dt, 5)
+        if (followRef.current && sim.state.civilization) {
+          const s = sim.state, view = viewRef.current
+          const key = `${s.world.seed}/${s.worldVersion}/${s.buildings.length}/${s.civilization!.era}/${view.w}/${view.h}`
+          if (followTargetRef.current?.key !== key) {
+            const core = s.buildings.filter((b) => !['quarry', 'factory', 'powerplant', 'granary', 'farmhouse'].includes(b.type ?? ''))
+            followTargetRef.current = { key, camera: frameSettlement(core, s.world.size, view.w, view.h, s.civilization!.era) }
+          }
+          const target = followTargetRef.current!.camera, alpha = 1 - Math.exp(-dt * 5)
+          const camera = camRef.current
+          camera.x += (target.x - camera.x) * alpha
+          camera.y += (target.y - camera.y) * alpha
+          camera.zoom += (target.zoom - camera.zoom) * alpha
+        }
         render(ctx, sim.state.world, terrain, camRef.current, viewRef.current, time, (octx, t) => {
           drawEntities(octx, sim.state, camRef.current, viewRef.current, t, selectionRef.current)
         })
+        frames++
+        if (sim.state.tick < sampledTick) { sampledTick = sim.state.tick; sampledAt = time; frames = 0 }
+        if (time - sampledAt >= 1000) {
+          const seconds = (time - sampledAt) / 1000
+          setRuntime({ fps: Math.round(frames / seconds), speed: Math.max(0, (sim.state.tick - sampledTick) / sim.tickRate / seconds) })
+          sampledAt = time; sampledTick = sim.state.tick; frames = 0
+        }
       }
       raf = requestAnimationFrame(loop)
     }
@@ -230,6 +255,11 @@ export default function App() {
     const pointers = new Map<number, { x: number; y: number }>()
     let downT = 0
     let moved = 0
+    const stopFollowing = () => {
+      if (!followRef.current) return
+      followRef.current = false
+      setFollowing(false)
+    }
 
     const toWorld = (clientX: number, clientY: number) => {
       const rect = canvas.getBoundingClientRect()
@@ -280,6 +310,7 @@ export default function App() {
     }
     const onMove = (e: PointerEvent) => {
       if (pointers.size >= 2 && pointers.has(e.pointerId)) {
+        stopFollowing()
         const beforePair = [...pointers.values()].slice(0, 2)
         const distance = (p: typeof beforePair) => Math.hypot(p[1].x - p[0].x, p[1].y - p[0].y)
         const mid = (p: typeof beforePair) => ({ x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 })
@@ -309,6 +340,7 @@ export default function App() {
       lastX = e.clientX
       lastY = e.clientY
       moved += Math.abs(dx) + Math.abs(dy)
+      if (moved > 8) stopFollowing()
       const cam = camRef.current
       const sps = TILE * cam.zoom
       cam.x -= dx / sps
@@ -336,6 +368,7 @@ export default function App() {
     }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
+      stopFollowing()
       const rect = canvas.getBoundingClientRect()
       const sx = e.clientX - rect.left
       const sy = e.clientY - rect.top
@@ -383,6 +416,9 @@ export default function App() {
     next.paused = true
     next.speed = prev.speed
     simRef.current = next
+    followRef.current = mode === 'evolution'
+    followTargetRef.current = null
+    setFollowing(followRef.current)
     const half = next.state.world.size / 2
     camRef.current = { x: half, y: half, zoom: camRef.current.zoom }
     setSelection(null)
@@ -420,6 +456,9 @@ export default function App() {
         return
       }
       simRef.current = loaded
+      followRef.current = !!loaded.state.civilization
+      followTargetRef.current = null
+      setFollowing(followRef.current)
       setSelection(null)
       setEpoch((e) => e + 1)
       saveTo(loaded, window.localStorage, AUTO_SAVE_KEY)
@@ -475,11 +514,15 @@ export default function App() {
     setUi(makeSnapshot(simRef.current!, selectionRef.current))
   }
   const navigate = (x: number, y: number) => {
+    followRef.current = false
+    setFollowing(false)
     camRef.current.x = x
     camRef.current.y = y
     clampCamera(camRef.current, simRef.current!.state.world.size, viewRef.current.w, viewRef.current.h)
   }
   const mapOverview = (city: boolean) => {
+    followRef.current = false
+    setFollowing(false)
     const s = simRef.current!.state,
       view = viewRef.current,
       points = s.buildings
@@ -520,11 +563,17 @@ export default function App() {
               <div className="city-map-heading">
                 <b>{ERAS[ui.civilization.era]}</b>
                 <span>
-                  {ui.pop} 人 · {ui.civilization.buildings} 座建筑
+                  {ui.pop} 人 · {ui.civilization.buildings} 座建筑 · v0.5
                 </span>
+                <small>{runtime.fps} FPS · 实速 {runtime.speed.toFixed(1)}× / 目标 {ui.speed}×</small>
               </div>
               <div className="map-controls">
-                <button onClick={() => mapOverview(true)}>城市总览</button>
+                <button className={following ? 'active' : ''} onClick={() => {
+                  followRef.current = true
+                  followTargetRef.current = null
+                  setFollowing(true)
+                }}>跟随城市</button>
+                <button onClick={() => mapOverview(true)}>全城总览</button>
                 <button onClick={() => mapOverview(false)}>整片大陆</button>
               </div>
               <MiniMap

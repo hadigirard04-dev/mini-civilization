@@ -33,3 +33,18 @@ export function clampCamera(cam: Camera, worldSize: number, viewW: number, viewH
   cam.x = halfW * 2 >= worldSize ? worldSize / 2 : clamp(cam.x, halfW, worldSize - halfW)
   cam.y = halfH * 2 >= worldSize ? worldSize / 2 : clamp(cam.y, halfH, worldSize - halfH)
 }
+
+/** 为城市场景留出天际线和顶部信息条空间；镜头根据城区范围而非整片大陆取景。 */
+export function frameSettlement(points: Array<{ x: number; y: number }>, worldSize: number,
+  viewW: number, viewH: number, era = 0): Camera {
+  const center = worldSize / 2
+  const minX = Math.min(...points.map((p) => p.x), center) - 3
+  const maxX = Math.max(...points.map((p) => p.x), center) + 4
+  const minY = Math.min(...points.map((p) => p.y), center) - (era >= 4 ? 8 : era >= 2 ? 5 : 3)
+  const maxY = Math.max(...points.map((p) => p.y), center) + 3
+  const zoom = Math.max(0.06, Math.min((viewW - 28) / (TILE * Math.max(12, maxX - minX)),
+    Math.max(100, viewH - 60) / (TILE * Math.max(10, maxY - minY)), 2.6))
+  const camera = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 - 12 / (zoom * TILE), zoom }
+  clampCamera(camera, worldSize, viewW, viewH)
+  return camera
+}

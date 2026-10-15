@@ -19,3 +19,27 @@
 - 长程结果：1585 人 / 303 建筑；初始 20 + 出生 209 + 迁入 1356 − 死亡 0 = 1585。住房平均距中心 9.5 格，农业 20.9 格，工业 22.0 格；中心旧宅可升级至 4 级
 - 下一步：根据手机实机 FPS 和实速反馈决定是否把模拟移至 Worker；如需严格历史年代，需重设时代门槛和长测预期
 - 已知边界：模型未校准现实人口参数，不模拟百万城市逐人行为；迁入存在 1800 人的个体规模上限。256×256 大陆的绝大部分仍是荒野，未实现跨区域特大城市群
+
+## 本机同步验收（2026-10-13）
+
+- `master` 已同步 GitHub `origin/master`：`bcdf6afc593582b17d724b7a44cccc639671154a`（v0.3.0）。
+- 原本地分叉版本的 13 个独有提交保留在 `backup/local-master-20261013-62595f3`，原 HEAD 为 `62595f362483348731901a3927630db8b6786cd0`。
+- 依赖按锁文件重新安装；常规回归为 63 项通过、1 项可选长测跳过；本次未重跑 4000 天长测。
+- `npm run build -- --base=/mini-civilization/` 通过；源码与锁文件对齐远端，本次只追加状态与日志记录。
+- 生产预览启动需同时指定 `--base=/mini-civilization/`；本次地址为 `http://127.0.0.1:4175/mini-civilization/`。
+- 浏览器启动检查：256×256 大陆模式，种子 337126754；20× 从第 1 天推进到第 20 天，建筑 3→5、农田 0→4；暂停冻结、保存后刷新恢复，未捕获页面脚本错误。
+- 本次未进行实体手机测试或长程城市性能验收。截图在工作区 `output/acceptance/mini-civilization/2026-10-13-sync/preview.png`。
+
+## 本机同步验收（2026-10-15）
+
+- `master` 快进到 GitHub `origin/master`：`c1b4de5dc666b260ce6cd8cf6cd770b7a6ced802`（v0.5 城市轮廓与快进响应），含 `0e7fef7` 城市分区与成长约束、`c1b4de5` 时代可见性与快进响应；本地无独有提交，未改写历史。
+- 10-13 的同步记录以 `git stash` 暂存后重新并入，`STATUS.md` 冲突人工合并：v0.5 条目为当前状态，10-13 记录原样保留在上方。
+- `npm ci` 后 `npm test`：15 个文件通过 / 1 跳过，69 项通过 / 1 跳过（跳过项为可选 4000 天长测）。
+- 可选长测按需重跑：`CIVILIZATION_LONG=1 npx vitest run tests/civilization-long.test.ts` 通过，耗时 47.8 秒（10-13 同项约 175 秒）。
+- `npm run build -- --base=/mini-civilization/` 通过，产物 `dist/assets/index-Cfc1XfSj.js`。
+- 线上 Pages 已是同一产物：`https://hadigirard04-dev.github.io/mini-civilization/` 返回 `index-Cfc1XfSj.js`，两次 push 的 Deploy 工作流均为 success，未手工触发部署。
+- 桌面实机（1440×900，本地预览 4176）：种子 20261015 从第 1 天跑起，271 人 / 77 建筑时 164 FPS、实速 200.0×；1448 人 / 279 建筑时 47 FPS、实速 38.7×，与“千人级后主线程模拟吃紧”的已知边界一致。控制台错误 0 条。
+- 手机画幅 390 宽：`documentElement.scrollWidth` 375 = `clientWidth`，无横向溢出。
+- 存档回读：保存后重新加载页面，恢复到现代都市存档（1700 人量级、324 建筑），未发现异常。
+- 本次仍未做实体手机测试；状态与日志的改动留在工作区未提交，本地与远端提交点保持一致。
+- 截图：`output/acceptance/mini-civilization/2026-10-15-sync/`（`v05-civilization-desktop.png`、`v05-civilization-mobile.png`、`v05-restored-city.png`、`v05-seed20261015.png`）。

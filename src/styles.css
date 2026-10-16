@@ -1130,6 +1130,50 @@ input:focus-visible {
   color: #ead07b;
   font-size: 15px;
 }
+.development-reason {
+  margin: 8px 0;
+  color: #b4c9bc;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.segmented button {
+  flex: 1;
+  min-width: 36px;
+  min-height: 32px;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-2);
+  color: var(--ink-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.segmented button.active,
+.segmented button[aria-pressed='true'] {
+  color: var(--amber);
+  border-color: var(--amber-deep);
+  background: #332b16;
+}
+.segmented button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+@media (max-width: 860px) { .segmented button { min-height: 44px; } }
+.development-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px 12px;
+  margin: 10px 0;
+  color: #99b8aa;
+  font-size: 11px;
+}
+.development-facts b { color: #e5eada; font-variant-numeric: tabular-nums; }
+.policy-effect { margin-top: 10px; color: #b4c9bc; font-size: 12px; line-height: 1.65; }
+.policy-effect b { display: block; margin-bottom: 3px; color: #ead07b; }
 .city-map-heading span {
   font-size: 11px;
   color: #b4c9bc;

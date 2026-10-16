@@ -68,6 +68,8 @@ export const PLOT = {
   steelTarget: 4000,
   /** 已有这么多“临路可建空地”时不再开路（让路网服务需求而不是铺满地图） */
   freeLandTarget: 12,
+  /** 按本地人口为住房、岗位和服务预留混合用地；每城最多保留 40 块空地。 */
+  freeLandResidentsPerBlock: 10,
 
   /** 农业：每块每日产粮（density 1 起，每级 +22%） */
   farm: { food: 30, levelBonus: 0.22 },

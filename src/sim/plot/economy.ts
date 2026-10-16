@@ -47,13 +47,18 @@ export function distributePopulation(state: PlotState): void {
   const pop = l.children + l.adults + l.elderly
   const rows = state.blocks.filter((b) => b.zone === 'residential' && b.density > 0)
   let totalWeight = 0
+  for (const b of state.blocks) b.population = 0
   for (const b of rows) {
     const weight = housingCapacityOf(b) * (0.5 + b.landValue)
     b.population = 0
     totalWeight += weight
     void b
   }
-  if (totalWeight <= 0) return
+  if (totalWeight <= 0) {
+    const camp = state.blocks.find((b) => b.civic === 'plaza' && b.density > 0)
+    if (camp) camp.population = pop
+    return
+  }
   for (const b of rows) {
     const weight = housingCapacityOf(b) * (0.5 + b.landValue)
     b.population = (pop * weight) / totalWeight
@@ -76,6 +81,7 @@ export function recomputeCoverage(state: PlotState): void {
   const sources: Record<string, number[]> = { market: [], school: [], clinic: [], park: [], waterworks: [] }
   for (const b of state.blocks) {
     if (b.zone === 'civic' && b.civic && b.density > 0 && sources[b.civic]) sources[b.civic].push(b.by * bg + b.bx)
+    if (b.zone === 'park' && b.density > 0) sources.park.push(b.by * bg + b.bx)
   }
   const radiusOf: Record<string, number> = {
     market: PLOT.radius.market,
@@ -105,7 +111,7 @@ export function recomputeCoverage(state: PlotState): void {
   }
   // 电力：全局供需比
   const demand = powerDemand(state)
-  const supply = powerSupply(state)
+  const supply = state.ledger.production.electricity
   const ratio = demand > 0 ? clamp01(supply / demand) : 1
   for (const b of state.blocks) b.covered.power = ratio
 }
@@ -258,7 +264,7 @@ function priorityOf(state: PlotState, b: Block): number {
   const l = state.ledger
   const woodShort = l.wood < PLOT.woodTarget
   const stoneShort = l.stone < PLOT.stoneTarget
-  if (b.zone === 'agriculture') return 100 * p.farm
+  if (b.zone === 'agriculture') return 200
   if (b.zone === 'none' && b.hasOre) return stoneShort ? 94 : 20
   if (b.zone === 'none' && b.hasForest) return woodShort ? 90 : 18
   if (b.zone === 'civic' && b.civic === 'powerplant') return 86
@@ -267,44 +273,65 @@ function priorityOf(state: PlotState, b: Block): number {
   if (b.zone === 'civic' && b.civic === 'school') return 74 * p.school
   if (b.zone === 'civic' && b.civic === 'market') return 70
   if (b.zone === 'civic' && b.civic === 'waterworks') return 66
-  if (b.zone === 'civic' && b.civic === 'clinic') return 64
+  if (b.zone === 'civic' && b.civic === 'clinic') return 64 * (state.policy === 'livable' ? p.park : 1)
   if (b.zone === 'civic' && b.civic === 'granary') return 60
   if (b.zone === 'civic' && b.civic === 'plaza') return 50
   if (b.zone === 'park') return 40 * p.park
   return 10
 }
 
-/** 每日结算：岗位分配 → 产出 → 消耗 → 人口动态 */
-export function settleDay(state: PlotState, rng: Rng): void {
+export function workshopCount(state: PlotState): number {
+  return state.blocks.filter((b) => b.zone === 'civic' && b.civic === 'workshop' && b.density > 0).length
+}
+
+/** 满员时的真实农业产能，供规划、配工与产出共用（在建田按落成后的一级计算）。 */
+export function farmDailyOutput(state: PlotState, b: Block, workshops = workshopCount(state)): number {
+  const level = 1 + PLOT.farm.levelBonus * (Math.max(1, b.density) - 1)
+  const machinery = state.era >= 2 ? 1 + PLOT.machineryPowerBonus * b.covered.power : 1
+  return PLOT.farm.food * level * b.logistics * machinery * (1 + PLOT.workshopBonus * workshops) * POLICY[state.policy].farm
+}
+
+/** 可从持久状态重建配工，不结算资源与人口，暂停读档后也能显示真实岗位。 */
+export function allocateWorkers(state: PlotState): void {
   const l = state.ledger
-  const bg = gridSize(state.world)
   const workers = l.adults
+  const workshops = workshopCount(state)
+  const farms = state.blocks.filter((b) => b.zone === 'agriculture' && b.density > 0)
+  const fullFood = farms.reduce((n, b) => n + farmDailyOutput(state, b, workshops), 0)
+  const need = dailyFoodNeed(state)
+  const reserveDays = state.policy === 'food' ? 40 : 25
+  const desiredFood = need * (state.policy === 'food' ? 1.35 : 1.1) + Math.max(0, need * reserveDays - l.food) / 30
+  const farmLoad = Math.min(1, desiredFood / Math.max(1, fullFood))
   const order = [...state.blocks].sort((a, b) => priorityOf(state, b) - priorityOf(state, a))
   let remaining = workers
-  let totalJobs = 0
   for (const b of order) {
     const demand = jobDemandOf(state, b)
     b.jobs = demand
-    const staffed = Math.min(demand, Math.max(0, remaining))
+    const staffed = Math.min(demand * (b.zone === 'agriculture' ? farmLoad : 1), Math.max(0, remaining))
     b.staffed = staffed
     remaining -= staffed
-    totalJobs += demand
   }
-  void totalJobs
-  void bg
+}
+
+/** 每日结算：岗位分配 → 产出 → 消耗 → 人口动态 */
+export function settleDay(state: PlotState, rng: Rng): void {
+  const l = state.ledger
+  allocateWorkers(state)
+  const workshops = workshopCount(state)
+  const need = dailyFoodNeed(state)
 
   // 电力：电站产出（受木石限制）
   let electricity = 0
+  let plantWood = 0
+  let plantStone = 0
   for (const b of state.blocks) {
     if (b.zone === 'civic' && b.civic === 'powerplant' && b.density > 0 && b.jobs > 0) {
       const ratio = b.staffed / b.jobs
       const woodNeed = (CIVIC_SPEC.powerplant.input?.wood ?? 0) * ratio
       const stoneNeed = (CIVIC_SPEC.powerplant.input?.stone ?? 0) * ratio
-      const fuel = Math.min(1, woodNeed > 0 ? l.wood / woodNeed : 1, stoneNeed > 0 ? l.stone / stoneNeed : 1)
-      l.wood = Math.max(0, l.wood - woodNeed * fuel)
-      l.stone = Math.max(0, l.stone - stoneNeed * fuel)
-      l.consumption.wood += woodNeed * fuel
-      l.consumption.stone += stoneNeed * fuel
+      const fuel = Math.max(0, Math.min(1, woodNeed > 0 ? (l.wood - plantWood) / woodNeed : 1, stoneNeed > 0 ? (l.stone - plantStone) / stoneNeed : 1))
+      plantWood += woodNeed * fuel
+      plantStone += stoneNeed * fuel
       electricity += (CIVIC_SPEC.powerplant.output?.electricity ?? 0) * ratio * fuel
     }
   }
@@ -325,17 +352,16 @@ export function settleDay(state: PlotState, rng: Rng): void {
     factoryStone += (spec.input.stone ?? 0) * ratio
     if (state.era >= 2) factoryPower += (spec.input.electricity ?? 0) * ratio
   }
-  const factoryLimit = Math.min(
+  const factoryLimit = Math.max(0, Math.min(
     1,
-    factoryWood > 0 ? l.wood / factoryWood : 1,
-    factoryStone > 0 ? l.stone / factoryStone : 1,
+    factoryWood > 0 ? (l.wood - plantWood) / factoryWood : 1,
+    factoryStone > 0 ? (l.stone - plantStone) / factoryStone : 1,
     factoryPower > 0 ? electricity / factoryPower : 1,
-  )
+  ))
 
   // 产出与消耗
-  const prod: Record<Res, number> = { food: 0, wood: 0, stone: 0, steel: 0, electricity: 0 }
-  const cons: Record<Res, number> = { food: 0, wood: 0, stone: 0, steel: 0, electricity: 0 }
-  const workshops = state.blocks.filter((b) => b.zone === 'civic' && b.civic === 'workshop').length
+  const prod: Record<Res, number> = { food: 0, wood: 0, stone: 0, steel: 0, electricity }
+  const cons: Record<Res, number> = { food: 0, wood: plantWood, stone: plantStone, steel: 0, electricity: 0 }
   const policy = POLICY[state.policy]
 
   for (const b of state.blocks) {
@@ -343,9 +369,7 @@ export function settleDay(state: PlotState, rng: Rng): void {
     if (ratio <= 0) continue
     const gather = gatherKind(state, b)
     if (b.zone === 'agriculture' && b.density > 0) {
-      const machinery = 1 + PLOT.machineryPowerBonus * powerRatio
-      const level = 1 + PLOT.farm.levelBonus * (b.density - 1)
-      prod.food += PLOT.farm.food * level * ratio * b.logistics * machinery * (1 + PLOT.workshopBonus * workshops) * policy.farm
+      prod.food += farmDailyOutput(state, b, workshops) * ratio
     } else if (gather === 'forest') {
       prod.wood += PLOT.gather.forest.wood * ratio * b.logistics
     } else if (gather === 'ore') {
@@ -374,7 +398,7 @@ export function settleDay(state: PlotState, rng: Rng): void {
         prod.wood += (out.wood ?? 0) * ratio
         prod.stone += (out.stone ?? 0) * ratio
         prod.steel += (out.steel ?? 0) * ratio
-        l.knowledge += (out.knowledge ?? 0) * ratio
+        l.knowledge += (out.knowledge ?? 0) * ratio * (b.civic === 'school' ? policy.school : 1)
       }
       const input = spec.input
       if (input) {
@@ -387,6 +411,7 @@ export function settleDay(state: PlotState, rng: Rng): void {
 
   l.wood = Math.max(0, l.wood - cons.wood)
   l.stone = Math.max(0, l.stone - cons.stone)
+  l.electricity = Math.max(0, electricity - cons.electricity)
   l.food += prod.food
   l.wood += prod.wood
   l.stone += prod.stone
@@ -401,7 +426,6 @@ export function settleDay(state: PlotState, rng: Rng): void {
   if (l.food > l.storageCapacity) l.food = l.storageCapacity
 
   // 人口：食物消耗、出生、死亡、年龄结构
-  const need = dailyFoodNeed(state)
   const eaten = Math.min(l.food, need)
   l.food = Math.max(0, l.food - eaten)
   l.consumption.food = need
@@ -428,7 +452,7 @@ export function settleDay(state: PlotState, rng: Rng): void {
     crowdPenalty
   const starveDeaths = deficit > 0 ? Math.max(1, pop * 0.002) : 0
   const births = Math.floor(birthExpected) + (rng.next() < birthExpected % 1 ? 1 : 0)
-  const deaths = Math.floor(deathExpected) + (rng.next() < deathExpected % 1 ? 1 : 0) + starveDeaths
+  const deaths = Math.min(pop + births, Math.floor(deathExpected) + (rng.next() < deathExpected % 1 ? 1 : 0) + starveDeaths)
 
   l.children += births
   l.births += births
@@ -571,7 +595,7 @@ export function eraRequirements(state: PlotState): Requirement[] {
     label,
     value,
     target,
-    met: value + 1e-9 >= target,
+    met: label === '工业/住宅相邻' ? value <= target : value + 1e-9 >= target,
   })
   switch (state.era) {
     case 0:
@@ -602,11 +626,8 @@ export function eraRequirements(state: PlotState): Requirement[] {
   }
 }
 
-/** 门槛是否全部达成的判定方向（相邻数、缺工类指标为“越小越好”） */
-const LOWER_IS_BETTER = new Set(['工业/住宅相邻'])
-
 export function eraGateMet(state: PlotState): boolean {
   const list = eraRequirements(state)
   if (list.length === 0) return false
-  return list.every((r) => (LOWER_IS_BETTER.has(r.label) ? r.value <= r.target : r.met))
+  return list.every((r) => r.met)
 }

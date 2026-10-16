@@ -807,11 +807,12 @@ export default function App() {
               <div className="city-map-heading">
                 <b>{plotUi.eraName}</b>
                 <span>
-                  {Math.round(plotUi.population)} 人 · {plotUi.settlements.length} 聚落 · v0.6
+                  {Math.round(plotUi.population)} 人 · {plotUi.settlements.length} 聚落 · v0.6.1
                 </span>
                 <small>
                   {runtime.fps} FPS · 实速 {runtime.speed.toFixed(1)}× / 目标 {plotUi.speed}×
                 </small>
+                <small>{plotUi.development.title}</small>
               </div>
               <div className="map-controls">
                 <button

@@ -9,10 +9,11 @@ import {
   neighbors4,
   rebuildBlockBuildings,
 } from './blocks'
-import { canBuildRoad, hasRoadAccess, isBridge, readRoad, roadConnected, writeRoad } from './roads'
+import { canBuildRoad, connectionRoute, edgeBetween, hasRoadAccess, isBridge, readRoad, roadConnected, writeRoad } from './roads'
 import { dailyFoodNeed, eraGateMet, eraRequirements, populationOf, powerDemand, recomputeCoverage, recomputeLandValue, recomputeLogistics, recomputePollution, recomputeStats, settleMigration } from './economy'
 import type { Block, CivicKind, Construction, Ledger, PlotState, Zone } from './types'
 import { MOUNTAIN } from '../world'
+import { developmentDemand, plannedHousingOf } from './development'
 
 type Cost = { wood: number; stone: number; steel?: number }
 
@@ -40,6 +41,7 @@ function startConstruction(block: Block, kind: string, days: number): void {
 /** 定居点评分：淡水、林地、可耕平地、矿脉、地形优势 */
 export function siteScore(state: PlotState, index: number): number {
   const b = state.blocks[index]
+  if (b.settlement >= 0 || b.zone !== 'none' || b.construction) return -1
   if (!b.buildable) return -1
   if (b.terrain === MOUNTAIN) return -1
   const bg = gridSize(state.world)
@@ -224,7 +226,8 @@ export function growRoads(state: PlotState): number {
       if (hasBuiltIndustryNeighbour(state, index, gridSize(state.world))) continue
       freeLand++
     }
-    if (freeLand >= Math.min(40, Math.max(PLOT.freeLandTarget, Math.ceil(populationOf(state) / 60)))) continue
+    const needsTrunkRoads = state.era === 1 && state.stats.roadEdges < 60
+    if (!needsTrunkRoads && freeLand >= Math.min(40, Math.max(PLOT.freeLandTarget, Math.ceil(settlement.population / PLOT.freeLandResidentsPerBlock)))) continue
     const budget = Math.max(1, Math.round(PLOT.roadsPerCycle * policy.road))
     const candidates = new Map<number, number>()
     for (const index of settlement.blocks) {
@@ -253,19 +256,10 @@ export function assignZones(state: PlotState, rng: Rng): number {
   const policy = POLICY[state.policy]
   const ledger = state.ledger
   const pop = populationOf(state)
-  const need = Math.max(1, dailyFoodNeed(state))
-  const foodDays = ledger.food / need
-  const capacity = state.stats.housingCapacity
-  const jobSpare = state.blocks.reduce((n, b) => n + b.jobs, 0) - ledger.adults
   const building = state.blocks.filter((b) => b.construction !== null).length
   const budget = Math.max(1, Math.round((PLOT.zonesPerCycle * policy.zone) / (1 + building * 0.15)))
 
-  const wantAgriculture =
-    state.stats.builtAgriculture < 6 || state.stats.builtAgriculture < Math.ceil((need / PLOT.farm.food) * 1.5)
-  const wantHousing = capacity < pop * (1 + PLOT.housingBufferRatio) + PLOT.housingBufferMin
-  const wantIndustry = state.era >= 1 && (jobSpare < 4 || state.stats.industryBlocks < state.settlements.length)
-
-  type Candidate = { index: number; zone: Zone; score: number; need: number }
+  type Candidate = { index: number; zone: Zone; score: number }
   const list: Candidate[] = []
   for (const b of state.blocks) {
     if (b.settlement < 0 || b.zone !== 'none' || !b.buildable) continue
@@ -281,24 +275,24 @@ export function assignZones(state: PlotState, rng: Rng): number {
     ).length
     const oreNeighbours = neighbors4(bg, index).filter((nb) => state.blocks[nb].hasOre).length
 
-    if (wantHousing && roadAccess && !hasBuiltIndustryNeighbour(state, index, bg)) {
+    if (roadAccess && !hasBuiltIndustryNeighbour(state, index, bg)) {
       const score =
         0.34 * (1 - Math.min(1, b.pollution)) +
         0.26 * b.landValue +
         0.2 * (1 - Math.min(1, distance)) +
         0.12 * Math.min(1, housingNeighbours / 3) +
         0.08 * (state.stats.marketCoveredRatio > 0.6 ? b.covered.market : 0.5)
-      list.push({ index, zone: 'residential', score, need: pop * (1 + PLOT.housingBufferRatio) + PLOT.housingBufferMin - capacity })
+      list.push({ index, zone: 'residential', score })
     }
-    if (wantAgriculture && !b.hasOre && (b.hasWater || isFertile(b) || b.hasForest)) {
+    if (!b.hasOre && (b.hasWater || isFertile(b) || b.hasForest)) {
       const score =
         0.4 * (b.hasWater ? 1 : 0) +
         0.26 * (isFertile(b) ? 1 : 0) +
         0.2 * Math.min(1, distance) +
         0.14 * (b.terrain === MOUNTAIN ? 0 : 1)
-      list.push({ index, zone: 'agriculture', score, need: Math.max(1, 30 - foodDays) })
+      list.push({ index, zone: 'agriculture', score })
     }
-    if (wantIndustry && roadAccess && industryNeighbours === 0 && state.stats.industryBlocks < Math.max(2, Math.ceil(pop / 150))) {
+    if (state.era >= 1 && roadAccess && industryNeighbours === 0) {
       const hasResidentialNeighbour = neighbors8HasResidential(state, index, bg)
       if (!hasResidentialNeighbour) {
         const score =
@@ -306,23 +300,49 @@ export function assignZones(state: PlotState, rng: Rng): number {
           0.3 * (1 - b.landValue) +
           0.2 * Math.min(1, distance) +
           0.1 * (b.hasForest ? 1 : 0)
-        list.push({ index, zone: 'industry', score, need: Math.max(1, 4 - jobSpare) })
+        list.push({ index, zone: 'industry', score })
       }
     }
     if (state.era >= 2 && roadAccess && housingNeighbours >= 2) {
       const score = 0.5 * (1 - b.landValue) + 0.3 * Math.min(1, housingNeighbours / 4) + 0.2 * b.covered.park
-      list.push({ index, zone: 'park', score, need: POLICY[state.policy].park })
+      list.push({ index, zone: 'park', score })
     }
   }
 
-  list.sort((a, b) => b.score * b.need - a.score * a.need)
   let assigned = 0
-  for (const candidate of list) {
-    if (assigned >= budget) break
+  while (assigned < budget) {
+    const demand = developmentDemand(state)
+    const industries = state.blocks.filter((b) => b.zone === 'industry')
+    const weight = (c: Candidate): number => {
+      const block = state.blocks[c.index]
+      const local = demand.local.get(block.settlement)
+      if (block.zone !== 'none' || block.construction || !canAfford(ledger, COSTS.zone[c.zone])) return 0
+      if (c.zone === 'residential') {
+        if (hasBuiltIndustryNeighbour(state, c.index, bg)) return 0
+        if (block.settlement > 0 && local && local.homes < 2) return 200
+        return demand.housingGap > 0 ? 10 + demand.housingGap / 30 : 0
+      }
+      if (c.zone === 'agriculture') {
+        if (block.settlement > 0 && local && local.farms < 1) return 180
+        if (demand.farms < 6) return 8 + (6 - demand.farms) * 2
+        return demand.foodGap > 0 ? 12 + demand.foodGap / PLOT.farm.food : 0
+      }
+      if (c.zone === 'industry') {
+        if (neighbors8HasResidential(state, c.index, bg)) return 0
+        if (industries.length >= Math.max(2, Math.ceil(pop / 150))) return 0
+        return industries.length < state.settlements.length || demand.jobsGap > 0 ? 8 + demand.jobsGap / 8 : 0
+      }
+      return demand.parkGap > 0 ? 2 * policy.park : 0
+    }
+    let candidate: Candidate | undefined
+    let best = 0
+    for (const c of list) {
+      const score = c.score * weight(c)
+      if (score > best) { best = score; candidate = c }
+    }
+    if (!candidate) break
     const block = state.blocks[candidate.index]
-    if (block.zone !== 'none' || block.construction) continue
     const cost = COSTS.zone[candidate.zone]
-    if (!canAfford(ledger, cost)) break
     pay(ledger, cost)
     block.zone = candidate.zone
     if (candidate.zone === 'industry') {
@@ -377,9 +397,9 @@ export function planServices(state: PlotState, rng: Rng): number {
   const need = Math.max(1, dailyFoodNeed(state))
   const wants: Array<{ kind: CivicKind; priority: number }> = []
   const count = (kind: CivicKind): number =>
-    state.blocks.filter((b) => b.zone === 'civic' && b.civic === kind && b.density > 0).length
+    state.blocks.filter((b) => b.density > 0 && (b.zone === 'civic' && b.civic === kind || kind === 'park' && b.zone === 'park')).length
   const pending = (kind: CivicKind): number =>
-    state.blocks.filter((b) => b.construction?.kind === `civic:${kind}`).length
+    state.blocks.filter((b) => b.construction?.kind === `civic:${kind}` || kind === 'park' && b.zone === 'park' && b.construction !== null).length
 
   if (count('granary') + pending('granary') < 1 + Math.floor(pop / 400) && ledger.storageCapacity < need * 30) {
     wants.push({ kind: 'granary', priority: 95 })
@@ -395,20 +415,19 @@ export function planServices(state: PlotState, rng: Rng): number {
     // 时代门槛需要知识时，规划器优先建学校（规划器朝门槛努力）
     wants.push({ kind: 'school', priority: needKnowledge ? 97 : 70 * policy.school })
   }
-  if (ledger.storageCapacity < need * 20) wants.push({ kind: 'granary', priority: 90 })
   const waterCovered =
     state.blocks.filter((b) => b.zone === 'residential' && b.covered.water >= PLOT.coveredLine).length /
     Math.max(1, state.stats.residentialBlocks)
   if (state.stats.residentialBlocks > 3 && waterCovered < 0.6 && count('waterworks') + pending('waterworks') < 1 + Math.floor(pop / 500)) {
     wants.push({ kind: 'waterworks', priority: 80 })
   }
-  if (state.era >= 2 && count('clinic') + pending('clinic') < 1 + Math.floor(pop / 1200)) {
-    wants.push({ kind: 'clinic', priority: 66 })
+  if (state.era >= 2 && count('clinic') + pending('clinic') < Math.ceil((1 + Math.floor(pop / 1200)) * (state.policy === 'livable' ? 1.3 : 1))) {
+    wants.push({ kind: 'clinic', priority: 66 * (state.policy === 'livable' ? policy.park : 1) })
   }
   if (state.era >= 2 && count('powerplant') + pending('powerplant') < Math.ceil(powerDemand(state) / 16) && state.stats.powerCoverage < 0.92) {
     wants.push({ kind: 'powerplant', priority: 88 })
   }
-  if (state.era >= 2 && count('park') + pending('park') < 1 + Math.floor(pop / 300)) {
+  if (state.era >= 1 && count('park') + pending('park') < Math.ceil((1 + Math.floor(pop / 300)) * policy.park)) {
     wants.push({ kind: 'park', priority: 55 * policy.park })
   }
   if (wants.length === 0) return 0
@@ -435,6 +454,17 @@ export function planServices(state: PlotState, rng: Rng): number {
           const penalty = neighbors4(bg, b.by * bg + b.bx).filter((nb) => state.blocks[nb].zone === 'residential').length
           return (want.kind === 'waterworks' && b.hasWater ? 0.6 : 0) - penalty * 0.3 + (want.kind === 'powerplant' ? 1 - b.landValue : 0)
         }
+        if (want.kind === 'market' || want.kind === 'school' || want.kind === 'clinic' || want.kind === 'park') {
+          const kind = want.kind
+          const radius = PLOT.radius[kind]
+          return state.blocks.reduce((score, home) => {
+            if (home.zone !== 'residential') return score
+            const distance = Math.max(Math.abs(home.bx - b.bx), Math.abs(home.by - b.by))
+            if (distance > radius) return score
+            const gain = Math.max(0, Math.min(1 - home.covered[kind], 1 - PLOT.coverageFalloff * distance / radius))
+            return score + gain * Math.max(1, home.population, plannedHousingOf(home) * 0.25)
+          }, 0)
+        }
         const busy = neighbors4(bg, b.by * bg + b.bx).filter((nb) => state.blocks[nb].zone === 'residential').length
         return busy / 4 + (b.landValue > 0 ? 0.3 : 0)
       }
@@ -456,13 +486,14 @@ export function planUpgrades(state: PlotState): number {
   const need = Math.max(1, dailyFoodNeed(state))
   const foodDays = ledger.food / need
   let started = 0
-  const budget = PLOT.upgradesPerCycle
+  const budget = Math.max(1, Math.round(PLOT.upgradesPerCycle * POLICY[state.policy].upgrade))
   for (const b of state.blocks) {
     if (started >= budget) break
-    if (b.construction || b.density <= 0 || b.density >= 4) continue
+    if (b.construction || b.density <= 0 || b.density >= Math.min(4, state.era + 1)) continue
     const next = b.density + 1
     if (b.zone === 'residential') {
-      const occupancy = state.stats.housingCapacity > 0 ? populationOf(state) / state.stats.housingCapacity : 0
+      const futureHousing = state.blocks.reduce((n, row) => n + plannedHousingOf(row), 0)
+      const occupancy = futureHousing > 0 ? populationOf(state) / futureHousing : 0
       if (b.landValue < PLOT.upgradeLandValue[next]) continue
       if (occupancy < PLOT.upgradeOccupancy) continue
     } else if (b.zone === 'agriculture') {
@@ -512,7 +543,8 @@ export function tryFoundSettlement(state: PlotState, rng: Rng): number | null {
   const newest = state.settlements[state.settlements.length - 1]
   if (state.settlements.length > 1 && newest.blocks.length < 12) return null
   // 按聚落数递进：900 人开第一座新城、之后每多 900 人再开一座
-  if (populationOf(state) < PLOT.newSettlementPopulation * (state.settlements.length + 1)) return null
+  if (populationOf(state) < PLOT.newSettlementPopulation * state.settlements.length) return null
+  if (!canAfford(state.ledger, { wood: COSTS.civic.plaza.wood + 8, stone: 32 })) return null
   let best = -1
   let bestScore: number = PLOT.newSettlementScore
   const bg = gridSize(state.world)
@@ -525,6 +557,7 @@ export function tryFoundSettlement(state: PlotState, rng: Rng): number | null {
     }
   }
   if (best < 0) return null
+  pay(state.ledger, COSTS.civic.plaza)
   const id = state.nextSettlementId++
   const settlement = {
     id,
@@ -544,6 +577,10 @@ export function tryFoundSettlement(state: PlotState, rng: Rng): number | null {
   center.civic = 'plaza'
   center.density = 1
   rebuildBlockBuildings(center, rng)
+  // 新城中心本身也须临路，不能等下一轮规划才满足不变量。
+  for (const nb of neighbors4(bg, best)) {
+    if (state.blocks[nb].settlement < 0 && state.blocks[nb].buildable) connectBlock(state, id, nb)
+  }
   return id
 }
 
@@ -556,6 +593,34 @@ export function updateSettlementLinks(state: PlotState): void {
       if (roadConnected(state, a.center, b.center)) a.links.push(b.id)
     }
   }
+}
+
+export function connectSettlements(state: PlotState): number {
+  if (state.settlements.length < 2) return 0
+  const budget = Math.max(1, Math.round(2 * POLICY[state.policy].road))
+  let built = 0
+  for (const target of state.settlements.slice(1)) {
+    const source = state.settlements[0]
+    if (roadConnected(state, source.center, target.center)) continue
+    const a = state.blocks[source.center]
+    const b = state.blocks[target.center]
+    const direct = Math.abs(a.bx - b.bx) + Math.abs(a.by - b.by)
+    let route = connectionRoute(state, source.center, target.center, false)
+    if (!route || route.length - 1 > direct * 3) route = connectionRoute(state, source.center, target.center, true)
+    if (!route) continue
+    for (let i = 1; i < route.length; i++) {
+      const e = edgeBetween(state, route[i - 1], route[i])
+      if (readRoad(state, e.dir, e.bx, e.by) > 0) continue
+      if (built >= budget) return built
+      const bridge = isBridge(state, e.dir, e.bx, e.by)
+      const cost = bridge ? COSTS.bridge : COSTS.road
+      if (!canAfford(state.ledger, cost)) return built
+      pay(state.ledger, cost)
+      writeRoad(state, e.dir, e.bx, e.by, bridge ? 2 : 1)
+      built++
+    }
+  }
+  return built
 }
 
 /** 聚落级统计（人口/岗位/住房按块汇总） */
@@ -578,6 +643,7 @@ export function updateSettlementTotals(state: PlotState): void {
 /** 规划器完整一轮：路网 → 划区 → 公共服务 → 升级 */
 export function runPlannerCycle(state: PlotState, rng: Rng): void {
   recomputeStats(state)
+  recomputePollution(state)
   growRoads(state)
   assignZones(state, rng)
   planServices(state, rng)
@@ -592,6 +658,7 @@ export function runPlannerCycle(state: PlotState, rng: Rng): void {
       milestone(state, `settlement-${founded}`, `新的聚落沿着资源与水源建立（第 ${state.settlements.length} 个）`)
     }
   }
+  connectSettlements(state)
   updateSettlementLinks(state)
   updateSettlementTotals(state)
   recomputePollution(state)

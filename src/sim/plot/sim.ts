@@ -3,6 +3,7 @@ import { generateWorld } from '../world'
 import { DAYS_PER_YEAR, ERAS, ERA_SUBTITLES, PLOT, POLICY, TICKS_PER_DAY } from './config'
 import { createBlocks, gridSize, rebuildBlockBuildings } from './blocks'
 import {
+  allocateWorkers,
   dailyFoodNeed,
   distributePopulation,
   emptyLedger,
@@ -27,6 +28,7 @@ import {
   updateSettlementTotals,
 } from './planner'
 import type { Ledger, Overlay, PlotState, Policy, Settlement } from './types'
+import { developmentView, type DevelopmentView } from './development'
 
 export interface PlotView {
   era: number
@@ -49,9 +51,10 @@ export interface PlotView {
   journal: PlotState['journal']
   foodDays: number
   storageDays: number
-  power: { supply: number; demand: number; ratio: number }
+  power: { supply: number; capacity: number; demand: number; ratio: number }
   jobs: { total: number; staffed: number; spare: number }
   coverage: { market: number; school: number; clinic: number; park: number; water: number }
+  development: DevelopmentView
 }
 
 export function createPlotState(seed: number, size = 256): PlotState {
@@ -117,8 +120,9 @@ export class PlotSim {
     const sim = new PlotSim(state)
     foundFirstSettlement(state, sim.rng)
     runPlannerCycle(state, sim.rng)
-    recomputeStats(state)
     distributePopulation(state)
+    recomputeStats(state)
+    updateSettlementTotals(state)
     milestone(state, 'founded', '部落在选定的河湾落脚，开始修筑道路')
     return sim
   }
@@ -167,14 +171,23 @@ export class PlotSim {
       state.rngState = this.rng.getState()
       return
     }
-    advanceConstruction(state, this.rng)
+    const completed = advanceConstruction(state, this.rng)
+    if (completed > 0) {
+      recomputePollution(state)
+      recomputeCoverage(state)
+      recomputeLandValue(state)
+      recomputeLogistics(state)
+    }
     distributePopulation(state)
     recomputeStats(state)
     settleDay(state, this.rng)
     if (day % PLOT.planEveryDays === 0) runPlannerCycle(state, this.rng)
     if (day > 0 && day % PLOT.migrationEveryDays === 0) runMonthCycle(state, this.rng)
-    this.recordMilestones()
+    // 出生、死亡与迁入发生后再分布人口，聚落面板与全局账本使用同一时刻。
+    distributePopulation(state)
+    recomputeStats(state)
     updateSettlementTotals(state)
+    this.recordMilestones()
     state.rngState = this.rng.getState()
   }
 
@@ -200,7 +213,7 @@ export class PlotSim {
       if (rows.length === 0) return 0
       return rows.reduce((n, b) => n + pick(b), 0) / rows.length
     }
-    const supply = powerSupply(state)
+    const supply = state.ledger.production.electricity
     const demand = powerDemand(state)
     return {
       era: state.era,
@@ -223,7 +236,7 @@ export class PlotSim {
       journal: state.journal,
       foodDays: state.ledger.food / need,
       storageDays: state.ledger.storageCapacity / need,
-      power: { supply, demand, ratio: demand > 0 ? Math.min(1, supply / demand) : 1 },
+      power: { supply, capacity: powerSupply(state), demand, ratio: demand > 0 ? Math.min(1, supply / demand) : 1 },
       jobs: { total: jobs, staffed, spare: jobs - state.ledger.adults },
       coverage: {
         market: avg((b) => b.covered.market),
@@ -232,6 +245,7 @@ export class PlotSim {
         park: avg((b) => b.covered.park),
         water: avg((b) => b.covered.water),
       },
+      development: developmentView(state),
     }
   }
 
@@ -243,12 +257,13 @@ export class PlotSim {
   /** 载入后重建派生字段（覆盖/地价/物流/污染/人口分布） */
   static refreshDerived(state: PlotState, rng: Rng): void {
     for (const b of state.blocks) rebuildBlockBuildings(b, rng)
+    recomputePollution(state)
     recomputeCoverage(state)
     recomputeLandValue(state)
     recomputeLogistics(state)
-    recomputePollution(state)
-    recomputeStats(state)
+    allocateWorkers(state)
     distributePopulation(state)
+    recomputeStats(state)
     updateSettlementTotals(state)
   }
 }

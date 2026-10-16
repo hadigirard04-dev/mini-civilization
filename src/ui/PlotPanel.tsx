@@ -19,6 +19,13 @@ const OVERLAYS: Array<{ key: Overlay; label: string }> = [
 ]
 
 const POLICIES: Policy[] = ['balanced', 'food', 'growth', 'science', 'livable']
+const POLICY_DETAILS: Record<Policy, string> = {
+  balanced: '兼顾生产、建设与服务；粮食充足时，让劳动力转入其他岗位。',
+  food: '农业产能 +25%，储备目标 40 天；投入更多劳动力保粮，建设与研究会放缓。',
+  growth: '修路预算 +40%，分区预算 +30%；更快消耗木石，仍受实际住房与就业需求约束。',
+  science: '学校优先级与知识产出 +50%；农业产能 −10%，先确认粮食能持续供给。',
+  livable: '增加公园与诊所的优先级和规划名额；占用土地、材料与服务人员，换取本地地价与生活条件。',
+}
 
 interface Props {
   view: PlotView
@@ -174,6 +181,32 @@ export default function PlotPanel(props: Props) {
         </div>
       </section>
 
+      <section className="panel development-panel" aria-label="发展观察">
+        <div className="panel-title">发展观察</div>
+        <div className="detail-head" role="status">{view.development.title}</div>
+        <p className="development-reason">{view.development.reason}</p>
+        <div className="segmented" aria-label="发展政策">
+          {POLICIES.map((p) => (
+            <button key={p} className={view.policy === p ? 'active' : ''} aria-pressed={view.policy === p} onClick={() => props.onPolicy(p)}>
+              {POLICY[p].name}
+            </button>
+          ))}
+        </div>
+        <div className="policy-effect" aria-live="polite"><b>当前：{POLICY[view.policy].name}</b>{POLICY_DETAILS[view.policy]}</div>
+        <div className="hint">下一日更新配工与产出，下一轮更新建设安排。</div>
+        <div className="development-facts">
+          <span>在建 <b>{view.development.construction}</b> 项</span>
+          <span>待规划 <b>{view.development.nextPlanDays}</b> 天</span>
+          <span>在建住房 <b>{Math.round(view.development.pendingHousing)}</b> 名额</span>
+          <span>未在岗 <b>{Math.round(view.development.unemployed)}</b> 人</span>
+        </div>
+        {view.development.recommendation && view.development.recommendation !== view.policy && (
+          <button className="btn" onClick={() => props.onPolicy(view.development.recommendation!)}>
+            采用{POLICY[view.development.recommendation].name}政策
+          </button>
+        )}
+      </section>
+
       <section className="panel">
         <div className="panel-title">聚落</div>
         {view.settlements.map((s) => (
@@ -208,6 +241,7 @@ export default function PlotPanel(props: Props) {
             <span className="hint"> 覆盖 {(view.power.ratio * 100).toFixed(0)}%</span>
           </span>
         </div>
+        {view.era >= 2 && <div className="hint">电力为实际发电 / 需求 · 装机容量 {view.power.capacity.toFixed(0)}</div>}
         <div className="res-row">
           <span className="res-name">知识</span>
           <span className="res-value">{Math.round(ledger.knowledge).toLocaleString('zh-CN')}</span>
@@ -247,18 +281,6 @@ export default function PlotPanel(props: Props) {
           {(view.coverage.clinic * 100).toFixed(0)}% · 公园 {(view.coverage.park * 100).toFixed(0)}% · 供水{' '}
           {(view.coverage.water * 100).toFixed(0)}%
         </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-title">政策</div>
-        <div className="segmented">
-          {POLICIES.map((p) => (
-            <button key={p} className={view.policy === p ? 'active' : ''} onClick={() => props.onPolicy(p)}>
-              {POLICY[p].name}
-            </button>
-          ))}
-        </div>
-        <div className="hint">政策改变规划器权重：粮食偏农业、扩张偏修路、研究偏学校、宜居偏公园与诊所。</div>
       </section>
 
       <section className="panel">

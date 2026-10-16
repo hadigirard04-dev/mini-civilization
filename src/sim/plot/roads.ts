@@ -126,3 +126,41 @@ export function bfsRoadDistances(state: PlotState, sources: number[]): Int16Arra
 export function roadConnected(state: PlotState, from: number, to: number): boolean {
   return bfsRoadDistances(state, [from])[to] >= 0
 }
+
+export function edgeBetween(state: PlotState, from: number, to: number): { dir: RoadDir; bx: number; by: number } {
+  const bg = gridSize(state.world)
+  const a = blockCoords(from, bg)
+  const b = blockCoords(to, bg)
+  return a.bx !== b.bx
+    ? { dir: 'v', bx: Math.max(a.bx, b.bx), by: a.by }
+    : { dir: 'h', bx: a.bx, by: Math.max(a.by, b.by) }
+}
+
+/** 城际通道独立于城区空地需求，优先陆路，必要时才考虑桥梁。 */
+export function connectionRoute(state: PlotState, from: number, to: number, bridges: boolean): number[] | null {
+  const previous = new Int16Array(state.blocks.length).fill(-1)
+  const queue = [from]
+  previous[from] = from
+  const bg = gridSize(state.world)
+  for (let head = 0; head < queue.length && previous[to] < 0; head++) {
+    const cur = queue[head]
+    const { bx, by } = blockCoords(cur, bg)
+    const neighbors: number[] = []
+    if (bx > 0) neighbors.push(cur - 1)
+    if (bx + 1 < bg) neighbors.push(cur + 1)
+    if (by > 0) neighbors.push(cur - bg)
+    if (by + 1 < bg) neighbors.push(cur + bg)
+    for (const next of neighbors) {
+      if (previous[next] >= 0) continue
+      const e = edgeBetween(state, cur, next)
+      if (!canBuildRoad(state, e.dir, e.bx, e.by)) continue
+      if (!bridges && isBridge(state, e.dir, e.bx, e.by)) continue
+      previous[next] = cur
+      queue.push(next)
+    }
+  }
+  if (previous[to] < 0) return null
+  const route = [to]
+  for (let cur = to; cur !== from;) { cur = previous[cur]; route.push(cur) }
+  return route.reverse()
+}

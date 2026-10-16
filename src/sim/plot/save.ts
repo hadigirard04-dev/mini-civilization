@@ -4,7 +4,7 @@ import type { StorageLike } from '../save'
 import { emptyLedger } from './economy'
 import { createBlocks, gridSize } from './blocks'
 import { PlotSim } from './sim'
-import type { Block, CivicKind, Construction, PlotState, Policy, Zone } from './types'
+import type { Block, CivicKind, Construction, Overlay, PlotState, Policy, Zone } from './types'
 
 export const PLOT_SAVE_VERSION = 4
 export const PLOT_SAVE_PREFIX = 'MC4P:'
@@ -12,6 +12,7 @@ export const PLOT_SAVE_KEY = 'mini-civ-plot-v4'
 export const PLOT_AUTO_SAVE_KEY = 'mini-civ-plot-autosave-v4'
 const ZONES: Zone[] = ['none', 'residential', 'agriculture', 'industry', 'civic', 'park']
 const POLICIES: Policy[] = ['balanced', 'food', 'growth', 'science', 'livable']
+const OVERLAYS: Overlay[] = ['none', 'zone', 'coverage', 'landValue', 'pollution']
 
 export interface PlotSaveFile {
   version: 4
@@ -125,7 +126,7 @@ export function deserializePlot(json: string): PlotSaveFile | null {
       tick: raw.tick,
       rngState: isFiniteNumber(raw.rngState) ? raw.rngState : seed,
       policy: POLICIES.includes(raw.policy as Policy) ? (raw.policy as Policy) : 'balanced',
-      overlay: 'none',
+      overlay: OVERLAYS.includes(raw.overlay as Overlay) ? raw.overlay as Overlay : 'none',
       history: Array.isArray(raw.history) ? (raw.history as PlotState['history']) : [],
       journal: Array.isArray(raw.journal) ? (raw.journal as PlotState['journal']) : [],
       milestones: Array.isArray(raw.milestones) ? (raw.milestones as string[]) : [],

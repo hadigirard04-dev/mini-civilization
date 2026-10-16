@@ -1,4 +1,4 @@
-import type { Rng } from '../rng'
+import { createRng, type Rng } from '../rng'
 import { FOREST, GRASS, HILLS, MOUNTAIN, STONE, WATER, WETLAND, type World } from '../world'
 import { BLOCK_SIZE, PLOT } from './config'
 import type { Block, BlockBuilding, Zone } from './types'
@@ -162,7 +162,9 @@ function scatterBuildings(
 }
 
 /** 建筑描述符：仅渲染用，zone/density 变化时重建 */
-export function rebuildBlockBuildings(block: Block, rng: Rng): void {
+export function rebuildBlockBuildings(block: Block, _simulationRng: Rng): void {
+  // 美术布局不能消耗模拟随机数，否则读取存档重画建筑会改变后续出生与死亡。
+  const rng = createRng((block.bx * 73856093 ^ block.by * 19349663 ^ block.density * 83492791) >>> 0)
   const out: BlockBuilding[] = []
   if (block.zone === 'residential' && block.density > 0) {
     scatterBuildings(out, 'house', [0, 9, 16, 24, 32][Math.min(4, block.density)], rng, 8, 0.82)

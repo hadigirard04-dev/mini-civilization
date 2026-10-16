@@ -7,14 +7,45 @@ import { clampCamera, frameSettlement, screenToWorld, TILE, type Camera } from '
 import { render, type View } from './render/draw'
 import { drawEntities, type Selection } from './render/entities'
 import { buildTerrainCanvas, patchTerrainCanvas } from './render/terrain'
-import { AUTO_SAVE_KEY, loadFrom, saveTo } from './sim/save'
+import { createWalkers, drawPlot, updateWalkers, type Walker } from './render/plot'
+import { AUTO_SAVE_KEY, loadFrom, saveTo, SAVE_KEY } from './sim/save'
+import {
+  PLOT_AUTO_SAVE_KEY,
+  PLOT_SAVE_KEY,
+  detectSaveKind,
+  loadPlot,
+  savePlot,
+  type SaveKind,
+} from './sim/plot/save'
+import { BLOCK_SIZE } from './sim/plot/config'
+import { gridSize } from './sim/plot/blocks'
+import { populationOf } from './sim/plot/economy'
+import { PlotSim, type PlotView } from './sim/plot/sim'
+import type { Block, Overlay, Policy } from './sim/plot/types'
+import PlotPanel from './ui/PlotPanel'
 import { Simulation } from './sim/simulation'
 import type { ResourceType } from './sim/world'
 import { getTile } from './sim/world'
+import type { SimState } from './sim/types'
 import Sidebar, { type SelectedTileInfo, type SelectedVillagerInfo, type UiSnapshot } from './ui/Sidebar'
+
+type AnySim = PlotSim | Simulation
+type NewMode = 'plot' | 'sandbox' | 'survival' | 'evolution'
+
+function isPlot(sim: AnySim): sim is PlotSim {
+  return sim instanceof PlotSim
+}
 
 function randomSeed(): number {
   return Math.floor(Math.random() * 1_000_000_000)
+}
+
+function legacyKind(storage: Storage): SaveKind {
+  for (const key of [AUTO_SAVE_KEY, SAVE_KEY]) {
+    const kind = detectSaveKind(storage, key)
+    if (kind !== 'none') return kind
+  }
+  return 'none'
 }
 
 function makeSnapshot(sim: Simulation, selection: Selection): UiSnapshot {
@@ -77,32 +108,47 @@ function makeSnapshot(sim: Simulation, selection: Selection): UiSnapshot {
 export default function App() {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const simRef = useRef<Simulation | null>(null)
+  const simRef = useRef<AnySim | null>(null)
   const msgTimerRef = useRef(0)
+  const startupNoticeRef = useRef('')
+
   if (!simRef.current) {
-    // 启动时优先恢复本地存档
-    let loaded: Simulation | null = null
+    const storage = window.localStorage
+    let loaded: AnySim | null = null
     try {
-      loaded = loadFrom(window.localStorage, AUTO_SAVE_KEY) ?? loadFrom(window.localStorage)
+      loaded = loadPlot(storage, PLOT_AUTO_SAVE_KEY) ?? loadPlot(storage, PLOT_SAVE_KEY)
     } catch {
       loaded = null
     }
-    const fresh = new Simulation(randomSeed(), 'evolution')
-    fresh.paused = true
-    fresh.speed = 20
-    simRef.current = loaded ?? fresh
+    if (!loaded) {
+      const kind = legacyKind(storage)
+      if (kind === 'legacy-civilization') {
+        startupNoticeRef.current = '旧文明存档（v0.3/v0.5）不能在新版继续，已开始新的大陆演化；自由沙盒与首年生存存档仍可读取'
+      } else if (kind === 'legacy-other') {
+        try {
+          loaded = loadFrom(storage, AUTO_SAVE_KEY) ?? loadFrom(storage, SAVE_KEY)
+        } catch {
+          loaded = null
+        }
+      }
+    }
+    const sim: AnySim = loaded ?? PlotSim.create(randomSeed())
+    sim.paused = true
+    sim.speed = 20
+    simRef.current = sim
   }
   const camRef = useRef<Camera>({
     x: simRef.current!.state.world.size / 2,
     y: simRef.current!.state.world.size / 2,
-    zoom: 1.5,
+    zoom: isPlot(simRef.current!) ? 0.55 : 1.5,
   })
   const viewRef = useRef<View>({ w: 0, h: 0, dpr: 1 })
   const terrainRef = useRef<HTMLCanvasElement | null>(null)
   const selectionRef = useRef<Selection>(null)
   const worldVersionRef = useRef(0)
-  const followRef = useRef(!!simRef.current!.state.civilization)
+  const followRef = useRef(isPlot(simRef.current!) || !!simRef.current!.state.civilization)
   const followTargetRef = useRef<{ key: string; camera: Camera } | null>(null)
+  const walkersRef = useRef<Walker[]>([])
 
   if (import.meta.env.DEV) {
     ;(window as unknown as Record<string, unknown>).__miniCiv = { simRef, camRef, selectionRef }
@@ -110,10 +156,23 @@ export default function App() {
 
   const [epoch, setEpoch] = useState(0)
   const [selection, setSelection] = useState<Selection>(null)
-  const [saveMsg, setSaveMsg] = useState('')
-  const [ui, setUi] = useState<UiSnapshot>(() => makeSnapshot(simRef.current!, null))
+  const [saveMsg, setSaveMsg] = useState(startupNoticeRef.current)
+  const [ui, setUi] = useState<UiSnapshot | null>(() =>
+    isPlot(simRef.current!) ? null : makeSnapshot(simRef.current!, null),
+  )
+  const [plotUi, setPlotUi] = useState<PlotView | null>(() => (isPlot(simRef.current!) ? simRef.current!.view() : null))
   const [following, setFollowing] = useState(followRef.current)
   const [runtime, setRuntime] = useState({ fps: 0, speed: 0 })
+
+  const selectedBlock = ((): Block | null => {
+    const sim = simRef.current
+    if (!sim || !isPlot(sim) || selection?.kind !== 'tile') return null
+    const bg = gridSize(sim.state.world)
+    const bx = Math.floor(selection.x / BLOCK_SIZE)
+    const by = Math.floor(selection.y / BLOCK_SIZE)
+    if (bx < 0 || by < 0 || bx >= bg || by >= bg) return null
+    return sim.state.blocks[by * bg + bx]
+  })()
 
   useEffect(() => {
     selectionRef.current = selection
@@ -123,7 +182,14 @@ export default function App() {
   useEffect(() => {
     const sim = simRef.current!
     terrainRef.current = buildTerrainCanvas(sim.state.world)
-    setUi(makeSnapshot(sim, selectionRef.current))
+    walkersRef.current = []
+    if (isPlot(sim)) {
+      setPlotUi(sim.view())
+      setUi(null)
+    } else {
+      setUi(makeSnapshot(sim, selectionRef.current))
+      setPlotUi(null)
+    }
   }, [epoch])
 
   // 画布尺寸跟随容器（含 devicePixelRatio）
@@ -151,7 +217,9 @@ export default function App() {
   useEffect(() => {
     let raf = 0
     let last = performance.now()
-    let sampledAt = last, frames = 0, sampledTick = simRef.current!.state.tick
+    let sampledAt = last,
+      frames = 0,
+      sampledTick = simRef.current!.state.tick
     const loop = (time: number) => {
       const dt = Math.min(0.25, (time - last) / 1000)
       last = time
@@ -160,29 +228,81 @@ export default function App() {
       const canvas = canvasRef.current
       const ctx = canvas?.getContext('2d')
       if (sim && terrain && canvas && ctx && viewRef.current.w > 0) {
-        sim.advance(dt, 5)
-        if (followRef.current && sim.state.civilization) {
-          const s = sim.state, view = viewRef.current
-          const key = `${s.world.seed}/${s.worldVersion}/${s.buildings.length}/${s.civilization!.era}/${view.w}/${view.h}`
-          if (followTargetRef.current?.key !== key) {
-            const core = s.buildings.filter((b) => !['quarry', 'factory', 'powerplant', 'granary', 'farmhouse'].includes(b.type ?? ''))
-            followTargetRef.current = { key, camera: frameSettlement(core, s.world.size, view.w, view.h, s.civilization!.era) }
+        const plot = isPlot(sim)
+        sim.advance(dt, plot ? 3 : 5)
+        if (plot) {
+          const state = sim.state
+          const claimed = state.blocks.filter((b) => b.settlement >= 0)
+          if (followRef.current && claimed.length > 0) {
+            const s = state,
+              view = viewRef.current
+            const key = `${s.world.seed}/${claimed.length}/${view.w}/${view.h}`
+            if (followTargetRef.current?.key !== key) {
+              const points = claimed.map((b) => ({ x: b.bx * BLOCK_SIZE, y: b.by * BLOCK_SIZE }))
+              const target = frameSettlement(points, s.world.size, view.w, view.h)
+              // 城市变大后不要把整张地图缩成一片：保持街道级取景，超出画面的部分自然成长
+              target.zoom = Math.max(0.3, target.zoom)
+              followTargetRef.current = { key, camera: target }
+            }
+            const target = followTargetRef.current!.camera,
+              alpha = 1 - Math.exp(-dt * 4)
+            const camera = camRef.current
+            camera.x += (target.x - camera.x) * alpha
+            camera.y += (target.y - camera.y) * alpha
+            camera.zoom += (target.zoom - camera.zoom) * alpha
           }
-          const target = followTargetRef.current!.camera, alpha = 1 - Math.exp(-dt * 5)
-          const camera = camRef.current
-          camera.x += (target.x - camera.x) * alpha
-          camera.y += (target.y - camera.y) * alpha
-          camera.zoom += (target.zoom - camera.zoom) * alpha
+          const target = Math.max(24, Math.min(300, Math.round(populationOf(state) / 8)))
+          if (walkersRef.current.length === 0 || Math.abs(walkersRef.current.length - target) > target * 0.4) {
+            walkersRef.current = createWalkers(state, target, Math.random)
+          }
+          updateWalkers(state, walkersRef.current, dt)
+          const blockIndex =
+            selectionRef.current?.kind === 'tile'
+              ? Math.floor(selectionRef.current.y / BLOCK_SIZE) * gridSize(state.world) +
+                Math.floor(selectionRef.current.x / BLOCK_SIZE)
+              : -1
+          render(ctx, state.world, terrain, camRef.current, viewRef.current, time, (octx) => {
+            drawPlot(octx, state, camRef.current, viewRef.current, time, walkersRef.current, blockIndex)
+          })
+        } else if (sim.state.civilization) {
+          if (followRef.current) {
+            const s = sim.state,
+              view = viewRef.current
+            const key = `${s.world.seed}/${s.worldVersion}/${s.buildings.length}/${s.civilization!.era}/${view.w}/${view.h}`
+            if (followTargetRef.current?.key !== key) {
+              const core = s.buildings.filter((b) => !['quarry', 'factory', 'powerplant', 'granary', 'farmhouse'].includes(b.type ?? ''))
+              followTargetRef.current = { key, camera: frameSettlement(core, s.world.size, view.w, view.h, s.civilization!.era) }
+            }
+            const target = followTargetRef.current!.camera,
+              alpha = 1 - Math.exp(-dt * 5)
+            const camera = camRef.current
+            camera.x += (target.x - camera.x) * alpha
+            camera.y += (target.y - camera.y) * alpha
+            camera.zoom += (target.zoom - camera.zoom) * alpha
+          }
+          render(ctx, sim.state.world, terrain, camRef.current, viewRef.current, time, (octx, t) => {
+            drawEntities(octx, sim.state, camRef.current, viewRef.current, t, selectionRef.current)
+          })
+        } else {
+          render(ctx, sim.state.world, terrain, camRef.current, viewRef.current, time, (octx, t) => {
+            drawEntities(octx, sim.state, camRef.current, viewRef.current, t, selectionRef.current)
+          })
         }
-        render(ctx, sim.state.world, terrain, camRef.current, viewRef.current, time, (octx, t) => {
-          drawEntities(octx, sim.state, camRef.current, viewRef.current, t, selectionRef.current)
-        })
         frames++
-        if (sim.state.tick < sampledTick) { sampledTick = sim.state.tick; sampledAt = time; frames = 0 }
+        if (sim.state.tick < sampledTick) {
+          sampledTick = sim.state.tick
+          sampledAt = time
+          frames = 0
+        }
         if (time - sampledAt >= 1000) {
           const seconds = (time - sampledAt) / 1000
-          setRuntime({ fps: Math.round(frames / seconds), speed: Math.max(0, (sim.state.tick - sampledTick) / sim.tickRate / seconds) })
-          sampledAt = time; sampledTick = sim.state.tick; frames = 0
+          setRuntime({
+            fps: Math.round(frames / seconds),
+            speed: Math.max(0, (sim.state.tick - sampledTick) / sim.tickRate / seconds),
+          })
+          sampledAt = time
+          sampledTick = sim.state.tick
+          frames = 0
         }
       }
       raf = requestAnimationFrame(loop)
@@ -196,6 +316,10 @@ export default function App() {
     const timer = window.setInterval(() => {
       const sim = simRef.current
       if (!sim) return
+      if (isPlot(sim)) {
+        setPlotUi(sim.view())
+        return
+      }
       const snap = makeSnapshot(sim, selectionRef.current)
       if (snap.worldVersion !== worldVersionRef.current) {
         worldVersionRef.current = snap.worldVersion
@@ -208,8 +332,11 @@ export default function App() {
 
   useEffect(() => {
     const persist = () => {
+      const sim = simRef.current
+      if (!sim) return
       try {
-        saveTo(simRef.current!, window.localStorage, AUTO_SAVE_KEY)
+        if (isPlot(sim)) savePlot(sim, window.localStorage, PLOT_AUTO_SAVE_KEY)
+        else saveTo(sim, window.localStorage, AUTO_SAVE_KEY)
       } catch {
         setSaveMsg('自动保存失败，请检查浏览器存储空间')
       }
@@ -237,7 +364,8 @@ export default function App() {
         const sim = simRef.current
         if (sim && !sim.blocked) {
           sim.paused = !sim.paused
-          setUi((prev) => ({ ...prev, paused: sim.paused }))
+          if (isPlot(sim)) setPlotUi((prev) => (prev ? { ...prev, paused: sim.paused } : prev))
+          else setUi((prev) => (prev ? { ...prev, paused: sim.paused } : prev))
         }
       }
     }
@@ -268,10 +396,12 @@ export default function App() {
     }
 
     const pickVillager = (clientX: number, clientY: number) => {
+      const sim = simRef.current
+      if (!sim || isPlot(sim)) return null
       const w = toWorld(clientX, clientY)
       let best: { id: number } | null = null
       let bestD = 0.8
-      for (const v of simRef.current!.state.villagers) {
+      for (const v of sim.state.villagers) {
         if (!v.alive) continue
         const d = Math.hypot(v.x - w.x, v.y - w.y)
         if (d < bestD) {
@@ -348,13 +478,7 @@ export default function App() {
       clampCamera(cam, simRef.current!.state.world.size, viewRef.current.w, viewRef.current.h)
     }
     const onUp = (e: PointerEvent) => {
-      if (
-        e.type !== 'pointercancel' &&
-        pointers.size === 1 &&
-        dragging &&
-        moved < 8 &&
-        Date.now() - downT < 600
-      ) {
+      if (e.type !== 'pointercancel' && pointers.size === 1 && dragging && moved < 8 && Date.now() - downT < 600) {
         pick(e.clientX, e.clientY)
       }
       pointers.delete(e.pointerId)
@@ -401,55 +525,84 @@ export default function App() {
     const sim = simRef.current!
     if (sim.blocked) return
     sim.paused = !sim.paused
-    setUi((prev) => ({ ...prev, paused: sim.paused }))
+    if (isPlot(sim)) setPlotUi((prev) => (prev ? { ...prev, paused: sim.paused } : prev))
+    else setUi((prev) => (prev ? { ...prev, paused: sim.paused } : prev))
   }
   const setSpeed = (n: number) => {
     const sim = simRef.current!
     sim.speed = n
-    setUi((prev) => ({ ...prev, speed: n }))
+    if (isPlot(sim)) setPlotUi((prev) => (prev ? { ...prev, speed: n } : prev))
+    else setUi((prev) => (prev ? { ...prev, speed: n } : prev))
   }
-  const resetWorld = (seedText: string, mode: 'survival' | 'sandbox' | 'evolution' = 'evolution') => {
+  const resetWorld = (seedText: string, mode: NewMode = 'plot') => {
     const parsed = Number.parseInt(seedText.trim(), 10)
     const seed = Number.isFinite(parsed) ? parsed : randomSeed()
     const prev = simRef.current!
-    const next = new Simulation(seed, mode)
+    const resolved: 'plot' | 'sandbox' | 'survival' = mode === 'evolution' ? 'plot' : mode
+    const next: AnySim = resolved === 'plot' ? PlotSim.create(seed) : new Simulation(seed, resolved)
     next.paused = true
     next.speed = prev.speed
     simRef.current = next
-    followRef.current = mode === 'evolution'
+    followRef.current = resolved === 'plot'
     followTargetRef.current = null
+    walkersRef.current = []
     setFollowing(followRef.current)
     const half = next.state.world.size / 2
-    camRef.current = { x: half, y: half, zoom: camRef.current.zoom }
+    camRef.current = { x: half, y: half, zoom: resolved === 'plot' ? 0.55 : camRef.current.zoom }
     setSelection(null)
     setEpoch((e) => e + 1)
     try {
-      saveTo(next, window.localStorage, AUTO_SAVE_KEY)
+      if (isPlot(next)) savePlot(next, window.localStorage, PLOT_AUTO_SAVE_KEY)
+      else saveTo(next, window.localStorage, AUTO_SAVE_KEY)
     } catch {
       setSaveMsg('自动保存失败')
     }
   }
   const grant = (type: ResourceType) => {
     const sim = simRef.current!
+    if (isPlot(sim)) return
     sim.grant(type, 50)
     setUi(makeSnapshot(sim, selectionRef.current))
   }
   const flashMsg = (msg: string) => {
     setSaveMsg(msg)
     window.clearTimeout(msgTimerRef.current)
-    msgTimerRef.current = window.setTimeout(() => setSaveMsg(''), 2000)
+    msgTimerRef.current = window.setTimeout(() => setSaveMsg(''), 2500)
   }
   const doSave = () => {
+    const sim = simRef.current!
     try {
-      saveTo(simRef.current!, window.localStorage)
-      saveTo(simRef.current!, window.localStorage, AUTO_SAVE_KEY)
+      if (isPlot(sim)) {
+        savePlot(sim, window.localStorage, PLOT_SAVE_KEY)
+        savePlot(sim, window.localStorage, PLOT_AUTO_SAVE_KEY)
+      } else {
+        saveTo(sim, window.localStorage)
+        saveTo(sim, window.localStorage, AUTO_SAVE_KEY)
+      }
       flashMsg('已保存 ✓')
     } catch {
       flashMsg('保存失败')
     }
   }
   const doLoad = () => {
+    const sim = simRef.current!
     try {
+      if (isPlot(sim)) {
+        const loaded = loadPlot(window.localStorage, PLOT_SAVE_KEY) ?? loadPlot(window.localStorage, PLOT_AUTO_SAVE_KEY)
+        if (!loaded) {
+          flashMsg('没有可用存档')
+          return
+        }
+        simRef.current = loaded
+        followRef.current = true
+        followTargetRef.current = null
+        walkersRef.current = []
+        setFollowing(true)
+        setSelection(null)
+        setEpoch((e) => e + 1)
+        flashMsg('已读取 ✓')
+        return
+      }
       const loaded = loadFrom(window.localStorage)
       if (!loaded) {
         flashMsg('没有可用存档')
@@ -469,8 +622,8 @@ export default function App() {
   }
   const reclaim = () => {
     const sel = selectionRef.current
-    if (!sel || sel.kind !== 'tile') return
     const sim = simRef.current!
+    if (isPlot(sim) || !sel || sel.kind !== 'tile') return
     const ok = sim.reclaimToFarmland(sel.x, sel.y)
     if (ok) {
       flashMsg(sim.state.campaign ? '已安排开垦，等待建筑工' : '已开垦为农田（木材 −5）')
@@ -481,18 +634,23 @@ export default function App() {
   }
 
   const changeWorkforce = (farmers: number, builders: number) => {
-    if (simRef.current!.setWorkforce(farmers, builders))
-      setUi(makeSnapshot(simRef.current!, selectionRef.current))
+    const sim = simRef.current!
+    if (isPlot(sim)) return
+    if (sim.setWorkforce(farmers, builders)) setUi(makeSnapshot(sim, selectionRef.current))
   }
   const build = (kind: BuildingKind) => {
-    if (!simRef.current!.orderBuilding(kind)) flashMsg('材料不足、工地已满或此处无可建草地')
-    setUi(makeSnapshot(simRef.current!, selectionRef.current))
+    const sim = simRef.current!
+    if (isPlot(sim)) return
+    if (!sim.orderBuilding(kind)) flashMsg('材料不足、工地已满或此处无可建草地')
+    setUi(makeSnapshot(sim, selectionRef.current))
   }
   const choose = (choice: number) => {
-    if (simRef.current!.resolveEvent(choice)) {
-      setUi(makeSnapshot(simRef.current!, selectionRef.current))
+    const sim = simRef.current!
+    if (isPlot(sim)) return
+    if (sim.resolveEvent(choice)) {
+      setUi(makeSnapshot(sim, selectionRef.current))
       try {
-        saveTo(simRef.current!, window.localStorage, AUTO_SAVE_KEY)
+        saveTo(sim, window.localStorage, AUTO_SAVE_KEY)
       } catch {
         flashMsg('自动保存失败')
       }
@@ -500,18 +658,36 @@ export default function App() {
   }
 
   const construct = (kind: ConstructionKind) => {
-    if (!simRef.current!.orderCivic(kind)) flashMsg('材料不足、未解锁或施工队列已满')
-    setUi(makeSnapshot(simRef.current!, selectionRef.current))
+    const sim = simRef.current!
+    if (isPlot(sim)) return
+    if (!sim.orderCivic(kind)) flashMsg('材料不足、未解锁或施工队列已满')
+    setUi(makeSnapshot(sim, selectionRef.current))
   }
   const toggleAuto = () => {
-    const c = simRef.current!.state.civilization
+    const sim = simRef.current!
+    if (isPlot(sim)) return
+    const c = sim.state.civilization
     if (c) c.autoBuild = !c.autoBuild
-    setUi(makeSnapshot(simRef.current!, selectionRef.current))
+    setUi(makeSnapshot(sim, selectionRef.current))
   }
   const setPriority = (priority: CivilizationView['priority']) => {
-    const c = simRef.current!.state.civilization
+    const sim = simRef.current!
+    if (isPlot(sim)) return
+    const c = sim.state.civilization
     if (c) c.priority = priority
-    setUi(makeSnapshot(simRef.current!, selectionRef.current))
+    setUi(makeSnapshot(sim, selectionRef.current))
+  }
+  const setPolicy = (policy: Policy) => {
+    const sim = simRef.current!
+    if (!isPlot(sim)) return
+    sim.setPolicy(policy)
+    setPlotUi(sim.view())
+  }
+  const setOverlay = (overlay: Overlay) => {
+    const sim = simRef.current!
+    if (!isPlot(sim)) return
+    sim.setOverlay(overlay)
+    setPlotUi(sim.view())
   }
   const navigate = (x: number, y: number) => {
     followRef.current = false
@@ -523,13 +699,30 @@ export default function App() {
   const mapOverview = (city: boolean) => {
     followRef.current = false
     setFollowing(false)
-    const s = simRef.current!.state,
-      view = viewRef.current,
-      points = s.buildings
-    const minX = city ? Math.min(...points.map((b) => b.x), s.world.size / 2) - 8 : 0,
-      maxX = city ? Math.max(...points.map((b) => b.x), s.world.size / 2) + 8 : s.world.size
-    const minY = city ? Math.min(...points.map((b) => b.y), s.world.size / 2) - 10 : 0,
-      maxY = city ? Math.max(...points.map((b) => b.y), s.world.size / 2) + 8 : s.world.size
+    const sim = simRef.current!
+    const s = sim.state
+    const view = viewRef.current
+    let minX = 0,
+      maxX = s.world.size,
+      minY = 0,
+      maxY = s.world.size
+    if (city) {
+      if (isPlot(sim)) {
+        const claimed = sim.state.blocks.filter((b) => b.settlement >= 0)
+        if (claimed.length > 0) {
+          minX = Math.min(...claimed.map((b) => b.bx)) * BLOCK_SIZE - BLOCK_SIZE
+          maxX = Math.max(...claimed.map((b) => b.bx)) * BLOCK_SIZE + BLOCK_SIZE * 2
+          minY = Math.min(...claimed.map((b) => b.by)) * BLOCK_SIZE - BLOCK_SIZE
+          maxY = Math.max(...claimed.map((b) => b.by)) * BLOCK_SIZE + BLOCK_SIZE * 2
+        }
+      } else {
+        const points = sim.state.buildings
+        minX = Math.min(...points.map((b) => b.x), s.world.size / 2) - 8
+        maxX = Math.max(...points.map((b) => b.x), s.world.size / 2) + 8
+        minY = Math.min(...points.map((b) => b.y), s.world.size / 2) - 10
+        maxY = Math.max(...points.map((b) => b.y), s.world.size / 2) + 8
+      }
+    }
     camRef.current = {
       x: (minX + maxX) / 2,
       y: (minY + maxY) / 2,
@@ -538,6 +731,9 @@ export default function App() {
     clampCamera(camRef.current, s.world.size, view.w, view.h)
   }
 
+  const plotMode = plotUi !== null
+  const plotSim = simRef.current && isPlot(simRef.current) ? simRef.current : null
+
   return (
     <div className="app">
       <header className="topbar">
@@ -545,12 +741,12 @@ export default function App() {
           <span className="brand-mark">▦</span>
           微型文明
           <span className="brand-sub">
-            {ui.civilization ? 'World Evolution' : ui.campaign ? 'First Winter' : 'Sandbox'}
+            {plotMode ? 'Plot Civilization' : ui?.civilization ? 'World Evolution' : ui?.campaign ? 'First Winter' : 'Sandbox'}
           </span>
         </div>
         <div className="topbar-meta">
           <span className="seed-tag">
-            {ui.civilization ? '256×256' : '64×64'} · 种子 {ui.seed}
+            {plotMode || ui?.civilization ? '256×256' : '64×64'} · 种子 {plotMode ? plotUi.seed : ui?.seed}
           </span>
           <span className="topbar-hint">拖动平移 · 双指 / 滚轮缩放 · 空格暂停</span>
         </div>
@@ -558,36 +754,65 @@ export default function App() {
       <div className="main">
         <div className="stage" ref={wrapRef}>
           <canvas ref={canvasRef} />
-          {ui.civilization && (
+          {plotMode && (
+            <>
+              <div className="city-map-heading">
+                <b>{plotUi.eraName}</b>
+                <span>
+                  {Math.round(plotUi.population)} 人 · {plotUi.settlements.length} 聚落 · v0.6
+                </span>
+                <small>
+                  {runtime.fps} FPS · 实速 {runtime.speed.toFixed(1)}× / 目标 {plotUi.speed}×
+                </small>
+              </div>
+              <div className="map-controls">
+                <button
+                  className={following ? 'active' : ''}
+                  onClick={() => {
+                    followRef.current = true
+                    followTargetRef.current = null
+                    setFollowing(true)
+                  }}
+                >
+                  跟随城市
+                </button>
+                <button onClick={() => mapOverview(true)}>全城总览</button>
+                <button onClick={() => mapOverview(false)}>整片大陆</button>
+              </div>
+            </>
+          )}
+          {ui?.civilization && (
             <>
               <div className="city-map-heading">
                 <b>{ERAS[ui.civilization.era]}</b>
                 <span>
                   {ui.pop} 人 · {ui.civilization.buildings} 座建筑 · v0.5
                 </span>
-                <small>{runtime.fps} FPS · 实速 {runtime.speed.toFixed(1)}× / 目标 {ui.speed}×</small>
+                <small>
+                  {runtime.fps} FPS · 实速 {runtime.speed.toFixed(1)}× / 目标 {ui.speed}×
+                </small>
               </div>
               <div className="map-controls">
-                <button className={following ? 'active' : ''} onClick={() => {
-                  followRef.current = true
-                  followTargetRef.current = null
-                  setFollowing(true)
-                }}>跟随城市</button>
+                <button
+                  className={following ? 'active' : ''}
+                  onClick={() => {
+                    followRef.current = true
+                    followTargetRef.current = null
+                    setFollowing(true)
+                  }}
+                >
+                  跟随城市
+                </button>
                 <button onClick={() => mapOverview(true)}>全城总览</button>
                 <button onClick={() => mapOverview(false)}>整片大陆</button>
               </div>
-              <MiniMap
-                state={simRef.current!.state}
-                cam={camRef.current}
-                view={viewRef.current}
-                onNavigate={navigate}
-              />
+              <MiniMap state={simRef.current!.state as SimState} cam={camRef.current} view={viewRef.current} onNavigate={navigate} />
             </>
           )}
-          {(ui.paused || ui.blocked) && (
-            <div className="pause-chip">{ui.blocked ? '等待决策' : '‖ 已暂停'}</div>
-          )}
-          {ui.campaign && (
+          {plotMode && plotUi.paused && <div className="pause-chip">‖ 已暂停</div>}
+          {!plotMode && ui?.blocked && <div className="pause-chip">等待决策</div>}
+          {!plotMode && !ui?.blocked && ui?.paused && <div className="pause-chip">‖ 已暂停</div>}
+          {ui?.campaign && (
             <div className={`stage-season season-${ui.campaign.season}`}>
               {SEASONS[ui.campaign.season]}季 · 第 {ui.campaign.day} 天
               <span>
@@ -596,35 +821,65 @@ export default function App() {
             </div>
           )}
         </div>
-        <Sidebar
-          ui={ui}
-          selection={selection}
-          onTogglePause={togglePause}
-          onSpeed={setSpeed}
-          onReset={resetWorld}
-          onGrant={grant}
-          onClearSelection={() => setSelection(null)}
-          onSave={doSave}
-          onLoad={doLoad}
-          saveMsg={saveMsg}
-          onReclaim={reclaim}
-          onConstruct={construct}
-          onAuto={toggleAuto}
-          onPriority={setPriority}
-          onWorkforce={changeWorkforce}
-          onBuild={build}
-        />
+        {plotMode ? (
+          <PlotPanel
+            view={plotUi}
+            state={plotSim!.state}
+            cam={camRef.current}
+            canvasView={viewRef.current}
+            fps={runtime.fps}
+            runtimeSpeed={runtime.speed}
+            selection={selectedBlock}
+            saveMsg={saveMsg}
+            onTogglePause={togglePause}
+            onSpeed={setSpeed}
+            onReset={(seed) => resetWorld(seed, 'plot')}
+            onSave={doSave}
+            onLoad={doLoad}
+            onPolicy={setPolicy}
+            onOverlay={setOverlay}
+            onFollow={() => {
+              followRef.current = true
+              followTargetRef.current = null
+              setFollowing(true)
+            }}
+            onCityOverview={() => mapOverview(true)}
+            onContinent={() => mapOverview(false)}
+            onNewMode={(mode) => resetWorld(String(plotUi.seed), mode)}
+          />
+        ) : (
+          <Sidebar
+            ui={ui!}
+            selection={selection}
+            onTogglePause={togglePause}
+            onSpeed={setSpeed}
+            onReset={(seedText, mode) => resetWorld(seedText, mode === 'evolution' ? 'plot' : mode)}
+            onGrant={grant}
+            onClearSelection={() => setSelection(null)}
+            onSave={doSave}
+            onLoad={doLoad}
+            saveMsg={saveMsg}
+            onReclaim={reclaim}
+            onConstruct={construct}
+            onAuto={toggleAuto}
+            onPriority={setPriority}
+            onWorkforce={changeWorkforce}
+            onBuild={build}
+          />
+        )}
       </div>
       <CampaignDialog
-        c={ui.campaign}
-        population={ui.pop}
-        capacity={ui.capacity}
+        c={ui?.campaign ?? null}
+        population={ui?.pop ?? 0}
+        capacity={ui?.capacity ?? 0}
         onChoice={choose}
         onContinue={() => {
-          simRef.current!.continueAfterYear()
-          setUi(makeSnapshot(simRef.current!, selectionRef.current))
+          const sim = simRef.current!
+          if (isPlot(sim)) return
+          sim.continueAfterYear()
+          setUi(makeSnapshot(sim, selectionRef.current))
         }}
-        onRestart={() => resetWorld(String(ui.seed), 'survival')}
+        onRestart={() => resetWorld(String(ui?.seed ?? ''), 'survival')}
       />
     </div>
   )

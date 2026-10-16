@@ -2,6 +2,17 @@
 
 技术：React + TypeScript + Vite，Canvas 2D 渲染，模拟与渲染分离，vitest 自动化测试。
 
+## 阶段 F：地块级文明（2026-10-16 重写「大陆文明演化」）
+
+设计文档：`docs/superpowers/specs/2026-10-15-plot-civilization-design.md`
+
+- [x] S1 地基：区块层（8×8 瓦片）+ 账本 + 单城路网生长 + 区块渲染 + 分区图层
+- [x] S2：服务覆盖、地价、分区规则、按本地条件升级、政策滑杆 + 覆盖/地价/污染图层
+- [x] S3：时代门槛换成形态指标、人口波动（出生/死亡/迁入都是聚合率）、多聚落选址与连接
+- [ ] S4：聚落间转运、都市带目标、README/截图/上线
+- [x] 测试：不变量 INV1–INV8（人口账守恒、资源非负、临路、工业与住宅隔离、无 NaN、存档往返、时代单调、值域）+ 12000 天长测
+- 验收命令：`npm test`（102 项）、`$env:PLOT_LONG='1'` 后 `npx vitest run tests/plot-long.test.ts`
+
 ## 阶段 A：骨架 + 世界生成 + Canvas 渲染
 - [x] 项目初始化（Vite/TS/vitest，vite 6 + vitest 5，0 漏洞）
 - [x] 种子随机数 + 64×64 世界生成（草地/森林/水域/石地，分位数分类保证四地形）

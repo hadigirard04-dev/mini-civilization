@@ -1,26 +1,15 @@
 import { BLOCK_SIZE } from '../sim/plot/config'
 import { ZONE_COLORS, gridSize } from '../sim/plot/blocks'
 import type { Block, Overlay, PlotState } from '../sim/plot/types'
-import {
-  DESERT,
-  FOREST,
-  GRASS,
-  HILLS,
-  MOUNTAIN,
-  SNOW,
-  STONE,
-  WATER,
-  WETLAND,
-  type World,
-} from '../sim/world'
+import type { Building } from '../sim/types'
+import { drawCivicBuilding, type ArtContext } from './city'
+import { drawVillager, type VillagerSprite } from './entities'
 import { TILE, type Camera } from './camera'
 import type { View } from './draw'
 
 const TERRAIN_COLORS = ['#6d9949', '#345f35', '#4385a7', '#938877', '#b59a4b', '#d0b174', '#d2e0e4', '#638c7a', '#959b67', '#667480']
 
-const HOUSE_BODY = ['#8a6a45', '#a8814f', '#b9744e', '#7d8b96', '#9fb3c8']
-const HOUSE_ROOF = ['#6b4f34', '#8a5b3a', '#8f4438', '#5d6b78', '#7a8fa6']
-
+/** 采样居民：只做表现，沿路网在区块之间流动 */
 export interface Walker {
   x: number
   y: number
@@ -28,49 +17,37 @@ export interface Walker {
   to: number
   t: number
   speed: number
-  tone: number
+  /** walk = 赶路；carry = 搬运；build = 施工 */
+  state: 'walk' | 'carry' | 'build'
+  wait: number
+  id: number
+  phase: number
+  facing: 1 | -1
+  carryType: 'food' | 'wood' | 'stone'
 }
 
-export function createWalkers(state: PlotState, count: number, rng: () => number): Walker[] {
-  const bg = gridSize(state.world)
+export function createWalkers(state: PlotState, count: number, rand: () => number): Walker[] {
   const claimed = state.blocks.filter((b) => b.settlement >= 0)
   if (claimed.length === 0) return []
   const out: Walker[] = []
   for (let i = 0; i < count; i++) {
-    const b = claimed[Math.floor(rng() * claimed.length)]
-    const x = (b.bx + rng()) * BLOCK_SIZE
-    const y = (b.by + rng()) * BLOCK_SIZE
-    out.push({ x, y, from: -1, to: -1, t: 0, speed: 0.4 + rng() * 0.5, tone: Math.floor(rng() * 4) })
+    const b = claimed[Math.floor(rand() * claimed.length)]
+    out.push({
+      x: (b.bx + rand()) * BLOCK_SIZE,
+      y: (b.by + rand()) * BLOCK_SIZE,
+      from: -1,
+      to: -1,
+      t: 0,
+      speed: 0.5 + rand() * 0.6,
+      state: 'walk',
+      wait: 0,
+      id: i,
+      phase: rand() * Math.PI * 2,
+      facing: 1,
+      carryType: rand() < 0.5 ? 'food' : 'wood',
+    })
   }
-  void bg
   return out
-}
-
-/** 居民动画：只做表现，沿道路边在区块之间走动 */
-export function updateWalkers(state: PlotState, walkers: Walker[], dt: number): void {
-  const bg = gridSize(state.world)
-  for (const w of walkers) {
-    if (w.to < 0) {
-      pickTarget(state, w, bg)
-      continue
-    }
-    w.t += dt * w.speed
-    if (w.t >= 1) {
-      const target = state.blocks[w.to]
-      w.x = (target.bx + 0.5) * BLOCK_SIZE
-      w.y = (target.by + 0.5) * BLOCK_SIZE
-      pickTarget(state, w, bg)
-      continue
-    }
-    const from = state.blocks[w.from]
-    const to = state.blocks[w.to]
-    const fx = (from.bx + 0.5) * BLOCK_SIZE
-    const fy = (from.by + 0.5) * BLOCK_SIZE
-    const tx = (to.bx + 0.5) * BLOCK_SIZE
-    const ty = (to.by + 0.5) * BLOCK_SIZE
-    w.x = fx + (tx - fx) * w.t
-    w.y = fy + (ty - fy) * w.t
-  }
 }
 
 function pickTarget(state: PlotState, w: Walker, bg: number): void {
@@ -85,16 +62,64 @@ function pickTarget(state: PlotState, w: Walker, bg: number): void {
   if (options.length === 0) {
     w.from = -1
     w.to = -1
+    w.state = 'walk'
     return
   }
+  const pick = options[Math.floor(rand01(w.x * 3.1 + w.y * 7.7 + w.id) * options.length)]
   w.from = index
-  w.to = options[Math.floor(rand01(w.x * 7 + w.y * 13) * options.length)]
+  w.to = pick
   w.t = 0
+  const target = state.blocks[pick]
+  // 目的地属性决定表现：去工地 → 施工；去仓储/市场 → 搬货；其余 → 赶路
+  if (target.construction) {
+    w.state = 'build'
+    w.wait = 1.6 + rand01(w.id * 2.3) * 2.4
+  } else if (target.zone === 'civic' && (target.civic === 'market' || target.civic === 'granary' || target.civic === 'plaza')) {
+    w.state = 'carry'
+    w.carryType = ['food', 'wood', 'stone'][Math.floor(rand01(w.id * 5.7) * 3)] as Walker['carryType']
+    w.wait = 0.6
+  } else {
+    w.state = 'walk'
+    w.wait = 0
+  }
 }
 
 function rand01(seed: number): number {
   const s = Math.sin(seed * 12.9898) * 43758.5453
   return s - Math.floor(s)
+}
+
+export function updateWalkers(state: PlotState, walkers: Walker[], dt: number): void {
+  const bg = gridSize(state.world)
+  for (const w of walkers) {
+    if (w.state === 'build' && w.to >= 0 && w.t >= 1) {
+      // 到了工地先干一会儿活
+      w.wait -= dt
+      if (w.wait <= 0) {
+        w.state = 'walk'
+        pickTarget(state, w, bg)
+      }
+      continue
+    }
+    if (w.to < 0) {
+      pickTarget(state, w, bg)
+      continue
+    }
+    const from = state.blocks[w.from]
+    const to = state.blocks[w.to]
+    const fx = (from.bx + 0.5) * BLOCK_SIZE
+    const fy = (from.by + 0.5) * BLOCK_SIZE
+    const tx = (to.bx + 0.5) * BLOCK_SIZE
+    const ty = (to.by + 0.5) * BLOCK_SIZE
+    const len = Math.max(0.001, Math.hypot(tx - fx, ty - fy))
+    w.t = Math.min(1, w.t + (dt * w.speed) / len)
+    w.phase += dt * 7
+    w.x = fx + (tx - fx) * w.t
+    w.y = fy + (ty - fy) * w.t
+    w.facing = tx >= fx ? 1 : -1
+    if (w.t >= 1) w.x = tx
+    if (w.t >= 1 && w.state !== 'build') pickTarget(state, w, bg)
+  }
 }
 
 function tintFor(overlay: Overlay, block: Block): string | null {
@@ -106,6 +131,76 @@ function tintFor(overlay: Overlay, block: Block): string | null {
   if (overlay === 'landValue') return `rgba(224,168,60,${(0.06 + block.landValue * 0.6).toFixed(3)})`
   if (overlay === 'pollution') return block.pollution > 0.01 ? `rgba(200,70,60,${Math.min(0.6, block.pollution * 0.4).toFixed(3)})` : null
   return null
+}
+
+/** 道路：画在地面层（建筑之下），宽度随缩放与等级变化 */
+function drawRoads(
+  ctx: CanvasRenderingContext2D,
+  state: PlotState,
+  firstX: number,
+  lastX: number,
+  firstY: number,
+  lastY: number,
+  zoom: number,
+): void {
+  const bg = gridSize(state.world)
+  const scale = Math.max(0.85, Math.min(1.7, zoom))
+  for (let by = firstY; by <= lastY + 1; by++) {
+    for (let bx = firstX; bx <= lastX + 1; bx++) {
+      const x0 = bx * BLOCK_SIZE * TILE
+      const y0 = by * BLOCK_SIZE * TILE
+      if (bx > 0 && bx < bg && by < bg) {
+        const level = state.vRoad[by * bg + bx]
+        if (level > 0) {
+          const width = (level >= 3 ? 6.5 : level === 2 ? 4.6 : 3.2) * scale
+          ctx.fillStyle = level >= 3 ? '#a49b86' : level === 2 ? '#aba189' : '#b2a992'
+          ctx.fillRect(x0 - width / 2, y0, width, BLOCK_SIZE * TILE)
+          ctx.fillStyle = 'rgba(88,78,62,.30)'
+          ctx.fillRect(x0 - width / 2, y0, 0.7, BLOCK_SIZE * TILE)
+          ctx.fillRect(x0 + width / 2 - 0.7, y0, 0.7, BLOCK_SIZE * TILE)
+        }
+      }
+      if (by > 0 && by < bg && bx < bg) {
+        const level = state.hRoad[by * bg + bx]
+        if (level > 0) {
+          const width = (level >= 3 ? 6.5 : level === 2 ? 4.6 : 3.2) * scale
+          ctx.fillStyle = level >= 3 ? '#a49b86' : level === 2 ? '#aba189' : '#b2a992'
+          ctx.fillRect(x0, y0 - width / 2, BLOCK_SIZE * TILE, width)
+          ctx.fillStyle = 'rgba(88,78,62,.30)'
+          ctx.fillRect(x0, y0 - width / 2, BLOCK_SIZE * TILE, 0.7)
+          ctx.fillRect(x0, y0 + width / 2 - 0.7, BLOCK_SIZE * TILE, 0.7)
+        }
+      }
+    }
+  }
+}
+
+function drawField(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
+  const px = x * TILE
+  const py = y * TILE
+  const pw = w * TILE
+  const ph = h * TILE
+  ctx.fillStyle = '#7fae4e'
+  ctx.fillRect(px, py, pw, ph)
+  ctx.fillStyle = 'rgba(56,84,32,.5)'
+  for (let i = 2; i < pw; i += 5) ctx.fillRect(px + i, py + 1, 1.4, ph - 2)
+  ctx.fillStyle = 'rgba(28,48,18,.35)'
+  ctx.fillRect(px, py, pw, 1.2)
+  ctx.fillRect(px, py + ph - 1.2, pw, 1.2)
+  ctx.fillRect(px, py, 1.2, ph)
+  ctx.fillRect(px + pw - 1.2, py, 1.2, ph)
+}
+
+/** 描述符 → 旧沙盒那套美术的类型与等级 */
+function artOf(kind: string, block: Block, era: number): { type: Building['type']; level: number } {
+  if (kind === 'house') {
+    const level = Math.max(0, Math.min(4, block.density - 1 + (era >= 4 ? 1 : 0)))
+    return { type: 'house', level }
+  }
+  if (kind === 'farmhouse') return { type: 'house', level: 1 }
+  if (kind === 'hut') return { type: 'house', level: 0 }
+  if (kind === 'campfire') return { type: 'campfire', level: 0 }
+  return { type: kind as Building['type'], level: 0 }
 }
 
 export function drawPlot(
@@ -120,7 +215,6 @@ export function drawPlot(
   const bg = gridSize(state.world)
   const z = cam.zoom
   const sps = TILE * z
-  // 可见区块范围（cam 是世界瓦片坐标，必须先换算成区块坐标再裁剪）
   const halfBlocksX = view.w / 2 / sps / BLOCK_SIZE
   const halfBlocksY = view.h / 2 / sps / BLOCK_SIZE
   const firstX = Math.max(0, Math.floor(cam.x / BLOCK_SIZE - halfBlocksX) - 1)
@@ -128,12 +222,11 @@ export function drawPlot(
   const firstY = Math.max(0, Math.floor(cam.y / BLOCK_SIZE - halfBlocksY) - 1)
   const lastY = Math.min(bg - 1, Math.ceil(cam.y / BLOCK_SIZE + halfBlocksY) + 1)
 
-  // 1. 区块底色（分区/图层）
+  // 1. 区块底色（分区 / 图层）
   if (state.overlay !== 'none') {
     for (let by = firstY; by <= lastY; by++) {
       for (let bx = firstX; bx <= lastX; bx++) {
-        const block = state.blocks[by * bg + bx]
-        const tint = tintFor(state.overlay, block)
+        const tint = tintFor(state.overlay, state.blocks[by * bg + bx])
         if (!tint) continue
         ctx.fillStyle = tint
         ctx.fillRect(bx * BLOCK_SIZE * TILE, by * BLOCK_SIZE * TILE, BLOCK_SIZE * TILE, BLOCK_SIZE * TILE)
@@ -141,218 +234,88 @@ export function drawPlot(
     }
   }
 
-  // 2. 建筑
+  // 2. 道路（地面层）
+  drawRoads(ctx, state, firstX, lastX, firstY, lastY, z)
+
+  // 3. 田地（地面层，在建筑之下）
   for (let by = firstY; by <= lastY; by++) {
     for (let bx = firstX; bx <= lastX; bx++) {
       const block = state.blocks[by * bg + bx]
-      if (block.buildings.length === 0) continue
-      const ox = bx * BLOCK_SIZE * TILE
-      const oy = by * BLOCK_SIZE * TILE
+      const ox = bx * BLOCK_SIZE
+      const oy = by * BLOCK_SIZE
       for (const b of block.buildings) {
-        drawBuilding(ctx, b, ox, oy, block, timeMs)
+        if (b.kind !== 'field') continue
+        drawField(ctx, ox + b.tx, oy + b.ty, b.w, b.h)
       }
     }
   }
 
-  // 3. 居民
-  for (const w of walkers) {
-    const px = w.x * TILE
-    const py = w.y * TILE
-    if (px < cam.x * TILE - view.w / 2 / z - 32 || px > cam.x * TILE + view.w / 2 / z + 32) continue
-    if (py < cam.y * TILE - view.h / 2 / z - 32 || py > cam.y * TILE + view.h / 2 / z + 32) continue
-    const bob = Math.sin((timeMs * 0.008 + w.tone) + w.t) * 0.6
-    ctx.fillStyle = ['#e8d7a8', '#d7b98a', '#c9d3a0', '#a9b7c9'][w.tone % 4]
-    ctx.fillRect(px - 2, py - 3 + bob, 4, 5)
-    ctx.fillStyle = '#2b2a22'
-    ctx.fillRect(px - 2, py + 2 + bob, 4, 1)
-  }
-
-  // 4. 道路（画在建筑之上，视觉上形成街网）
-  for (let by = firstY; by <= lastY + 1; by++) {
-    for (let bx = firstX; bx <= lastX + 1; bx++) {
-      const x0 = bx * BLOCK_SIZE * TILE
-      const y0 = by * BLOCK_SIZE * TILE
-      if (bx > 0 && bx < bg && by < bg) {
-        const level = state.vRoad[by * bg + bx]
-        if (level > 0) {
-          const width = level >= 3 ? 6 : level === 2 ? 4 : 2.5
-          ctx.fillStyle = level >= 3 ? '#6b6459' : level === 2 ? '#7d7467' : '#8a7f6c'
-          ctx.fillRect(x0 - width / 2, y0, width, BLOCK_SIZE * TILE)
+  // 4. 建筑与居民：按 y 排序做前后遮挡（与旧沙盒同一套画法）
+  const art: ArtContext = { era: state.era, hasFuel: state.ledger.wood > 0 && state.ledger.stone > 0 }
+  const detail = z >= 0.55
+  const dots = z < 0.65
+  const power = state.blocks[0]?.covered.power ?? 1
+  const items: Array<{ y: number; draw: () => void }> = []
+  for (let by = firstY; by <= lastY; by++) {
+    for (let bx = firstX; bx <= lastX; bx++) {
+      const block = state.blocks[by * bg + bx]
+      for (let i = 0; i < block.buildings.length; i++) {
+        const b = block.buildings[i]
+        if (b.kind === 'field') continue
+        const wx = bx * BLOCK_SIZE + b.tx
+        const wy = by * BLOCK_SIZE + b.ty
+        const info = artOf(b.kind, block, state.era)
+        const fake: Building = {
+          id: block.bx * 977 + block.by * 131 + i,
+          x: wx,
+          y: wy,
+          type: info.type,
+          level: info.level,
         }
-      }
-      if (by > 0 && by < bg && bx < bg) {
-        const level = state.hRoad[by * bg + bx]
-        if (level > 0) {
-          const width = level >= 3 ? 6 : level === 2 ? 4 : 2.5
-          ctx.fillStyle = level >= 3 ? '#6b6459' : level === 2 ? '#7d7467' : '#8a7f6c'
-          ctx.fillRect(x0, y0 - width / 2, BLOCK_SIZE * TILE, width)
-        }
+        items.push({ y: wy, draw: () => drawCivicBuilding(ctx, fake, art, timeMs, detail, power) })
       }
     }
   }
+  const stride = dots ? Math.max(1, Math.ceil(walkers.length / 260)) : 1
+  for (let i = 0; i < walkers.length; i++) {
+    const w = walkers[i]
+    if (dots && i % stride !== 0) continue
+    if (w.x < cam.x - halfBlocksX * BLOCK_SIZE - 4 || w.x > cam.x + halfBlocksX * BLOCK_SIZE + 4) continue
+    if (w.y < cam.y - halfBlocksY * BLOCK_SIZE - 6 || w.y > cam.y + halfBlocksY * BLOCK_SIZE + 4) continue
+    const sprite: VillagerSprite = {
+      id: w.id,
+      x: w.x,
+      y: w.y,
+      path: w.state === 'build' ? [] : [{ x: w.x, y: w.y }],
+      movePhase: w.phase,
+      task: w.state === 'build' ? 'build' : 'gather',
+      profession: w.state === 'carry' ? 'gatherer' : 'farmer',
+      hue: (w.id * 47) % 360,
+      carry: w.state === 'carry' ? 1 : 0,
+      carryType: w.carryType,
+      facing: w.facing,
+      eatAnim: -1,
+    }
+    items.push({
+      y: w.y,
+      draw: () => {
+        if (dots) {
+          ctx.fillStyle = '#f5d998'
+          ctx.fillRect(w.x * TILE, w.y * TILE, 2, 2)
+        } else drawVillager(ctx, sprite, timeMs, state.tick)
+      },
+    })
+  }
+  items.sort((a, b) => a.y - b.y)
+  for (const item of items) item.draw()
 
-  // 5. 中央广场与选中高亮
+  // 5. 选中地块高亮
   if (selection >= 0) {
     const b = state.blocks[selection]
     ctx.strokeStyle = '#f4b93e'
-    ctx.lineWidth = 2
+    ctx.lineWidth = 1.6
     ctx.strokeRect(b.bx * BLOCK_SIZE * TILE + 1, b.by * BLOCK_SIZE * TILE + 1, BLOCK_SIZE * TILE - 2, BLOCK_SIZE * TILE - 2)
   }
-}
-
-function drawBuilding(
-  ctx: CanvasRenderingContext2D,
-  b: { kind: string; tx: number; ty: number; w: number; h: number; level: number },
-  ox: number,
-  oy: number,
-  block: Block,
-  timeMs: number,
-): void {
-  const x = ox + b.tx * TILE
-  const y = oy + b.ty * TILE
-  const w = b.w * TILE
-  const h = b.h * TILE
-  switch (b.kind) {
-    case 'house': {
-      const level = Math.max(1, Math.min(4, block.density))
-      ctx.fillStyle = HOUSE_BODY[level]
-      ctx.fillRect(x + 2, y + 2, w - 4, h - 4)
-      ctx.fillStyle = HOUSE_ROOF[level]
-      ctx.fillRect(x + 2, y + 2, w - 4, Math.max(3, h * 0.22))
-      if (level >= 3) {
-        // 高层：窗格
-        ctx.fillStyle = level >= 4 ? 'rgba(226,240,255,0.35)' : 'rgba(40,44,40,0.35)'
-        for (let wy = y + h * 0.3; wy < y + h - 5; wy += 6) ctx.fillRect(x + 4, wy, w - 8, 2)
-      }
-      break
-    }
-    case 'field': {
-      ctx.fillStyle = '#7fae4e'
-      ctx.fillRect(x, y, w, h)
-      ctx.fillStyle = 'rgba(58,86,34,0.55)'
-      for (let i = 3; i < w; i += 6) ctx.fillRect(x + i, y + 2, 1.5, h - 4)
-      break
-    }
-    case 'farmhouse':
-      ctx.fillStyle = '#a8814f'
-      ctx.fillRect(x, y, w, h)
-      ctx.fillStyle = '#7a4b32'
-      ctx.fillRect(x, y, w, 4)
-      break
-    case 'factory': {
-      ctx.fillStyle = '#8d9099'
-      ctx.fillRect(x + 2, y + 4, w - 4, h - 6)
-      ctx.fillStyle = '#6b7078'
-      ctx.fillRect(x + w * 0.2, y - 6, 6, 12)
-      const smoke = Math.sin(timeMs * 0.001 + x) * 2
-      ctx.fillStyle = 'rgba(220,220,220,0.35)'
-      ctx.fillRect(x + w * 0.2 + smoke, y - 14, 8, 8)
-      break
-    }
-    case 'quarry':
-      ctx.fillStyle = '#7a6a55'
-      ctx.fillRect(x + 2, y + 2, w - 4, h - 4)
-      ctx.fillStyle = '#5b4d3c'
-      ctx.fillRect(x + 8, y + 8, w - 16, h - 16)
-      break
-    case 'hut':
-      ctx.fillStyle = '#6d5a3f'
-      ctx.fillRect(x, y, w, h)
-      break
-    case 'park': {
-      ctx.fillStyle = '#4f8f57'
-      ctx.fillRect(x, y, w, h)
-      ctx.fillStyle = '#2f6b3c'
-      for (let i = 0; i < 6; i++) {
-        const tx = x + 6 + ((i * 37) % Math.max(8, w - 12))
-        const ty = y + 6 + ((i * 53) % Math.max(8, h - 12))
-        ctx.beginPath()
-        ctx.arc(tx, ty, 7, 0, Math.PI * 2)
-        ctx.fill()
-      }
-      break
-    }
-    default: {
-      drawCivic(ctx, b.kind, x, y, w, h, block)
-    }
-  }
-}
-
-function drawCivic(ctx: CanvasRenderingContext2D, kind: string, x: number, y: number, w: number, h: number, block: Block): void {
-  const cx = x + w / 2
-  const cy = y + h / 2
-  switch (kind) {
-    case 'plaza':
-      ctx.fillStyle = '#b8a882'
-      ctx.fillRect(x, y, w, h)
-      ctx.fillStyle = '#e0a83c'
-      ctx.beginPath()
-      ctx.arc(cx, cy, 7, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.fillStyle = '#8a5b2a'
-      ctx.fillRect(cx - 1.5, cy - 12, 3, 8)
-      break
-    case 'market':
-      ctx.fillStyle = '#c8843f'
-      ctx.fillRect(x + 2, y + h * 0.3, w - 4, h * 0.55)
-      ctx.fillStyle = '#8f4a2f'
-      ctx.fillRect(x + 2, y + h * 0.3, w - 4, 5)
-      ctx.fillStyle = '#e6cf9a'
-      for (let i = x + 6; i < x + w - 6; i += 8) ctx.fillRect(i, y + h * 0.5, 4, 6)
-      break
-    case 'granary':
-      ctx.fillStyle = '#b9a06a'
-      ctx.fillRect(x + w * 0.15, y + h * 0.25, w * 0.7, h * 0.65)
-      ctx.fillStyle = '#8d7748'
-      ctx.fillRect(x + w * 0.15, y + h * 0.25, w * 0.7, 6)
-      break
-    case 'workshop':
-      ctx.fillStyle = '#8a7358'
-      ctx.fillRect(x + 3, y + h * 0.35, w - 6, h * 0.55)
-      ctx.fillStyle = '#6b5942'
-      ctx.fillRect(x + w * 0.2, y + h * 0.1, 8, 12)
-      break
-    case 'school':
-      ctx.fillStyle = '#c8b48c'
-      ctx.fillRect(x + 2, y + h * 0.3, w - 4, h * 0.6)
-      ctx.fillStyle = '#7a5a3a'
-      ctx.fillRect(x + 2, y + h * 0.3, w - 4, 5)
-      ctx.fillStyle = '#3f6fa8'
-      ctx.fillRect(cx - 1, y + h * 0.05, 2, h * 0.3)
-      ctx.fillRect(cx - 1, y + h * 0.05, 10, 6)
-      break
-    case 'clinic':
-      ctx.fillStyle = '#dfe4e0'
-      ctx.fillRect(x + 3, y + h * 0.25, w - 6, h * 0.65)
-      ctx.fillStyle = '#b8443c'
-      ctx.fillRect(cx - 2, cy - 6, 4, 14)
-      ctx.fillRect(cx - 7, cy - 1, 14, 4)
-      break
-    case 'waterworks':
-      ctx.fillStyle = '#7f8fa6'
-      ctx.fillRect(x + w * 0.2, y + h * 0.3, w * 0.6, h * 0.55)
-      ctx.fillStyle = '#5d8fc0'
-      ctx.beginPath()
-      ctx.arc(cx, y + h * 0.28, w * 0.28, 0, Math.PI * 2)
-      ctx.fill()
-      break
-    case 'powerplant':
-      ctx.fillStyle = '#6f747c'
-      ctx.fillRect(x + 3, y + h * 0.35, w - 6, h * 0.55)
-      ctx.fillStyle = '#565b62'
-      ctx.fillRect(cx - 5, y + h * 0.05, 10, h * 0.35)
-      ctx.strokeStyle = 'rgba(240,240,200,0.5)'
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.moveTo(cx - 8, y)
-      ctx.lineTo(cx + 8, y)
-      ctx.stroke()
-      break
-    default:
-      ctx.fillStyle = '#9aa39a'
-      ctx.fillRect(x + 4, y + 4, w - 8, h - 8)
-  }
-  void block
 }
 
 /** 缩略图：地形 + 分区 + 路网 + 视口框 */
@@ -363,11 +326,10 @@ export function drawPlotMiniMap(canvas: HTMLCanvasElement, state: PlotState, cam
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   ctx.clearRect(0, 0, size, size)
-  const world: World = state.world
-  const step = Math.max(1, Math.floor(world.size / bg))
+  const step = Math.max(1, Math.floor(state.world.size / bg))
   for (let by = 0; by < bg; by++) {
     for (let bx = 0; bx < bg; bx++) {
-      const terrain = world.tiles[(by * step + Math.floor(step / 2)) * world.size + (bx * step + Math.floor(step / 2))].terrain
+      const terrain = state.world.tiles[(by * step + Math.floor(step / 2)) * state.world.size + (bx * step + Math.floor(step / 2))].terrain
       ctx.fillStyle = TERRAIN_COLORS[terrain] ?? '#6d9949'
       ctx.fillRect(bx * cell, by * cell, cell + 0.6, cell + 0.6)
     }
@@ -394,20 +356,12 @@ export function drawPlotMiniMap(canvas: HTMLCanvasElement, state: PlotState, cam
   const sps = TILE * cam.zoom
   const halfW = view.w / 2 / sps / BLOCK_SIZE
   const halfH = view.h / 2 / sps / BLOCK_SIZE
-  const scale = cell / 1
   ctx.strokeStyle = '#f4f9ff'
   ctx.lineWidth = 1
   ctx.strokeRect(
-    (cam.x / BLOCK_SIZE - halfW) * scale,
-    (cam.y / BLOCK_SIZE - halfH) * scale,
-    halfW * 2 * scale,
-    halfH * 2 * scale,
+    (cam.x / BLOCK_SIZE - halfW) * cell,
+    (cam.y / BLOCK_SIZE - halfH) * cell,
+    halfW * 2 * cell,
+    halfH * 2 * cell,
   )
 }
-
-/** 地形像素图（与旧模式共用 terrain.ts 的离屏画布） */
-export function terrainColor(terrain: number): string {
-  return TERRAIN_COLORS[terrain] ?? '#6d9949'
-}
-
-export const TERRAIN_IDS = { GRASS, FOREST, WATER, STONE, HILLS, MOUNTAIN, DESERT, SNOW, WETLAND }

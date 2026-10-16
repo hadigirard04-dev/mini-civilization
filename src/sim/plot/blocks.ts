@@ -135,38 +135,59 @@ export function isFertile(block: Block): boolean {
   return block.terrain === GRASS || block.terrain === WETLAND || block.terrain === FOREST
 }
 
+/** 街区布局：在一格里铺出成片的 1 格建筑（视觉密度随等级提高） */
+function scatterBuildings(
+  out: BlockBuilding[],
+  kind: string,
+  count: number,
+  rng: Rng,
+  slots = 6,
+  spacing = 1.3,
+): void {
+  const cells: Array<[number, number]> = []
+  for (let j = 0; j < slots; j++) {
+    for (let i = 0; i < slots; i++) cells.push([0.4 + i * spacing, 0.4 + j * spacing])
+  }
+  // 洗牌后取前 count 个，位置在同一小区块内稳定（同一 rng 序列可复现）
+  for (let i = cells.length - 1; i > 0; i--) {
+    const j = Math.floor(rng.next() * (i + 1))
+    const tmp = cells[i]
+    cells[i] = cells[j]
+    cells[j] = tmp
+  }
+  for (let i = 0; i < Math.min(count, cells.length); i++) {
+    const [tx, ty] = cells[i]
+    out.push({ kind, tx, ty, w: 1, h: 1 })
+  }
+}
+
 /** 建筑描述符：仅渲染用，zone/density 变化时重建 */
 export function rebuildBlockBuildings(block: Block, rng: Rng): void {
   const out: BlockBuilding[] = []
-  const push = (kind: string, tx: number, ty: number, w: number, h: number): void => {
-    out.push({ kind, tx, ty, w, h, level: block.density })
-  }
   if (block.zone === 'residential' && block.density > 0) {
-    const size = block.density >= 3 ? 3 : 2
-    const slots = [1, 1 + size + 1, 1 + (size + 1) * 2].filter((v) => v + size <= BLOCK_SIZE - 1)
-    for (const ty of slots) {
-      for (const tx of slots) {
-        if (rng.next() < 0.18) continue
-        push('house', tx, ty, size, size)
-      }
-    }
+    scatterBuildings(out, 'house', [0, 9, 16, 24, 32][Math.min(4, block.density)], rng, 8, 0.82)
   } else if (block.zone === 'agriculture' && block.density > 0) {
-    push('field', 0, 0, BLOCK_SIZE, BLOCK_SIZE)
-    if (block.density >= 2) push('farmhouse', 5, 5, 2, 2)
-  } else if (block.zone === 'industry' && block.density > 0) {
-    if (block.industry === 'quarry') {
-      push('quarry', 1, 2, 5, 4)
-    } else {
-      push('factory', 1, 2, 5, 4)
-      if (block.density >= 2) push('factory', 5, 5, 2, 2)
+    const patches = 1 + Math.min(3, block.density - 1)
+    for (let i = 0; i < patches; i++) {
+      const gx = i % 2
+      const gy = Math.floor(i / 2) % 2
+      out.push({ kind: 'field', tx: 0.3 + gx * 3.6, ty: 0.3 + gy * 3.6, w: 3.4, h: 3.4 })
     }
+    out.push({ kind: 'farmhouse', tx: 6.2, ty: 6.2, w: 1, h: 1 })
+  } else if (block.zone === 'industry' && block.density > 0) {
+    const kind = block.industry === 'quarry' ? 'quarry' : 'factory'
+    out.push({ kind, tx: 3.5, ty: 4.5, w: 1, h: 1 })
+    if (block.density >= 2) out.push({ kind, tx: 5.6, ty: 5.6, w: 1, h: 1 })
+    if (block.density >= 3) out.push({ kind, tx: 2.2, ty: 5.8, w: 1, h: 1 })
   } else if (block.zone === 'civic' && block.civic) {
-    push(block.civic, 2, 2, 4, 4)
+    const art: Record<string, string> = { plaza: 'campfire', waterworks: 'well' }
+    out.push({ kind: art[block.civic] ?? block.civic, tx: 3.5, ty: 4.5, w: 1, h: 1 })
   } else if (block.zone === 'park' && block.density > 0) {
-    push('park', 1, 1, 6, 6)
+    scatterBuildings(out, 'park', 4 + block.density, rng, 5, 1.5)
   } else if (block.zone === 'none') {
-    if (block.hasForest) push('hut', 3, 3, 2, 2)
-    else if (block.hasOre) push('hut', 3, 3, 2, 2)
+    if (block.hasForest || block.hasOre) {
+      scatterBuildings(out, 'hut', 2, rng, 4, 2.2)
+    }
   }
   block.buildings = out
 }

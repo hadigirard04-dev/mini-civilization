@@ -37,7 +37,13 @@ function drawGrave(ctx: CanvasRenderingContext2D, v: Villager): void {
   ctx.fillRect(px - 2, py - 3.5, 4, 1)
 }
 
-function drawVillager(ctx: CanvasRenderingContext2D, v: Villager, timeMs: number, tick: number): void {
+/** 居民绘制只需要这些字段（地块文明的采样实体也能复用同一套画法） */
+export type VillagerSprite = Pick<
+  Villager,
+  'id' | 'x' | 'y' | 'path' | 'movePhase' | 'task' | 'profession' | 'hue' | 'carry' | 'carryType' | 'facing' | 'eatAnim'
+>
+
+export function drawVillager(ctx: CanvasRenderingContext2D, v: VillagerSprite, timeMs: number, tick: number): void {
   const px = Math.round(v.x * TILE)
   const py = Math.round(v.y * TILE)
   const walking = v.path.length > 0
@@ -400,7 +406,14 @@ export function drawEntities(
     if (!visible(b.x, b.y, buildingHeight(b) / TILE + 2)) continue
     while (person < people.length && people[person].y <= b.y + 0.8) drawPerson(people[person++])
     if (state.civilization) {
-      drawCivicBuilding(ctx, b, state, timeMs, cam.zoom >= 0.55, power)
+      drawCivicBuilding(
+        ctx,
+        b,
+        { era: state.civilization.era, hasFuel: state.stock.wood > 0 && state.stock.stone > 0 },
+        timeMs,
+        cam.zoom >= 0.55,
+        power,
+      )
       continue
     }
     drawHouse(ctx, b.x, b.y)

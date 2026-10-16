@@ -1,5 +1,13 @@
-import type { Building, SimState } from '../sim/types'
+import type { Building } from '../sim/types'
 import { TILE } from './camera'
+
+/** 画建筑需要的少量上下文（地块文明与旧沙盒共用同一套美术） */
+export interface ArtContext {
+  /** 时代：决定篝火/广场与塔楼样式 */
+  era: number
+  /** 是否还有燃料（木材与石头），用于烟囱冒烟 */
+  hasFuel: boolean
+}
 
 const towerPalette = ['#6695a5', '#849eac', '#628697', '#809da4']
 const sprites = new Map<string, HTMLCanvasElement>()
@@ -38,8 +46,8 @@ function smoke(ctx: CanvasRenderingContext2D, x: number, y: number, time: number
   }
 }
 
-function drawLocal(ctx: CanvasRenderingContext2D, b: Building, s: SimState, time: number, detail: boolean, power: number) {
-  const kind = b.type ?? 'house', level = b.level ?? 0, era = s.civilization!.era
+function drawLocal(ctx: CanvasRenderingContext2D, b: Building, art: ArtContext, time: number, detail: boolean, power: number) {
+  const kind = b.type ?? 'house', level = b.level ?? 0, era = art.era
   ctx.fillStyle = kind === 'house' && level < 2 ? '#b49a67' : '#b4b5a4'
   ctx.fillRect(-2, -1, 21, 19)
   ctx.fillStyle = 'rgba(12,22,23,.28)'
@@ -192,7 +200,7 @@ function drawLocal(ctx: CanvasRenderingContext2D, b: Building, s: SimState, time
       ctx.fillStyle = '#d2bbaa'
       ctx.fillRect(13, -29, 5, 3)
       ctx.fillRect(13, -19, 5, 3)
-      if (time >= 0 && power > 0 && detail && s.stock.wood > 0 && s.stock.stone > 0) smoke(ctx, 14, -40, time, b.id)
+      if (time >= 0 && power > 0 && detail) smoke(ctx, 14, -40, time, b.id)
     }
     return
   }
@@ -249,11 +257,11 @@ function drawLocal(ctx: CanvasRenderingContext2D, b: Building, s: SimState, time
   }
 }
 
-export function drawCivicBuilding(ctx: CanvasRenderingContext2D, b: Building, s: SimState,
+export function drawCivicBuilding(ctx: CanvasRenderingContext2D, b: Building, art: ArtContext,
   time: number, detail = true, power = 1) {
   const kind = b.type ?? 'house'
   const variant = kind === 'skyscraper' || (kind === 'house' && (b.level ?? 0) >= 4) ? b.id % 20 : 0
-  const key = `${kind}/${b.level ?? 0}/${variant}/${kind === 'campfire' ? s.civilization!.era : 0}/${Number(detail)}`
+  const key = `${kind}/${b.level ?? 0}/${variant}/${kind === 'campfire' ? art.era : 0}/${Number(detail)}`
   let sprite = sprites.get(key)
   if (!sprite) {
     sprite = document.createElement('canvas')
@@ -261,7 +269,7 @@ export function drawCivicBuilding(ctx: CanvasRenderingContext2D, b: Building, s:
     const paint = sprite.getContext('2d')
     if (paint) {
       paint.translate(12, 126)
-      drawLocal(paint, b, s, -1, detail, 0)
+      drawLocal(paint, b, art, -1, detail, 0)
     }
     // 上限约 4 MiB，不随城市建筑数量无限增长。
     if (sprites.size >= 160) sprites.delete(sprites.keys().next().value!)
@@ -272,7 +280,7 @@ export function drawCivicBuilding(ctx: CanvasRenderingContext2D, b: Building, s:
     ctx.save()
     ctx.translate(b.x * TILE, b.y * TILE)
     if (kind === 'powerplant') smoke(ctx, 3, -25, time, b.id)
-    else if (power > 0 && s.stock.wood > 0 && s.stock.stone > 0) smoke(ctx, 14, -40, time, b.id)
+    else if (power > 0 && art.hasFuel) smoke(ctx, 14, -40, time, b.id)
     ctx.restore()
   }
 }

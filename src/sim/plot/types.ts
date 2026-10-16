@@ -27,14 +27,13 @@ export interface Coverage {
   power: number
 }
 
-/** 渲染用建筑描述符：仅表现，不参与结算 */
+/** 渲染用建筑描述符：仅表现，不参与结算（1 格=1 栋，高度由等级决定） */
 export interface BlockBuilding {
   kind: string
   tx: number
   ty: number
   w: number
   h: number
-  level: number
 }
 
 export interface Construction {

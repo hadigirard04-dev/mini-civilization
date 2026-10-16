@@ -120,16 +120,14 @@ export default function App() {
     } catch {
       loaded = null
     }
+    // 新版默认进入地块文明；旧沙盒 / 首年存档仍在，可通过面板按钮继续
     if (!loaded) {
       const kind = legacyKind(storage)
-      if (kind === 'legacy-civilization') {
-        startupNoticeRef.current = '旧文明存档（v0.3/v0.5）不能在新版继续，已开始新的大陆演化；自由沙盒与首年生存存档仍可读取'
-      } else if (kind === 'legacy-other') {
-        try {
-          loaded = loadFrom(storage, AUTO_SAVE_KEY) ?? loadFrom(storage, SAVE_KEY)
-        } catch {
-          loaded = null
-        }
+      if (kind !== 'none') {
+        startupNoticeRef.current =
+          kind === 'legacy-civilization'
+            ? '已进入 v0.6 地块文明。旧的 v0.3/v0.5 文明存档不能继续，已在原处保留'
+            : '已进入 v0.6 地块文明（新玩法）。旧的沙盒 / 首年存档仍在，可点「继续旧存档」'
       }
     }
     const sim: AnySim = loaded ?? PlotSim.create(randomSeed())
@@ -140,7 +138,7 @@ export default function App() {
   const camRef = useRef<Camera>({
     x: simRef.current!.state.world.size / 2,
     y: simRef.current!.state.world.size / 2,
-    zoom: isPlot(simRef.current!) ? 0.55 : 1.5,
+    zoom: isPlot(simRef.current!) ? 0.9 : 1.5,
   })
   const viewRef = useRef<View>({ w: 0, h: 0, dpr: 1 })
   const terrainRef = useRef<HTMLCanvasElement | null>(null)
@@ -238,10 +236,40 @@ export default function App() {
               view = viewRef.current
             const key = `${s.world.seed}/${claimed.length}/${view.w}/${view.h}`
             if (followTargetRef.current?.key !== key) {
-              const points = claimed.map((b) => ({ x: b.bx * BLOCK_SIZE, y: b.by * BLOCK_SIZE }))
-              const target = frameSettlement(points, s.world.size, view.w, view.h)
-              // 城市变大后不要把整张地图缩成一片：保持街道级取景，超出画面的部分自然成长
-              target.zoom = Math.max(0.3, target.zoom)
+              // 地块文明的城市可能离地图中心很远，取景只用城市自身（并按发展重心居中）
+              const points = claimed.map((b) => ({
+                x: (b.bx + 0.5) * BLOCK_SIZE,
+                y: (b.by + 0.5) * BLOCK_SIZE,
+                w: b.zone === 'none' ? 0.2 : 1 + b.density * 0.5,
+              }))
+              let sumW = 0
+              let cx = 0
+              let cy = 0
+              let minX = Infinity
+              let maxX = -Infinity
+              let minY = Infinity
+              let maxY = -Infinity
+              for (const p of points) {
+                sumW += p.w
+                cx += p.x * p.w
+                cy += p.y * p.w
+                minX = Math.min(minX, p.x)
+                maxX = Math.max(maxX, p.x)
+                minY = Math.min(minY, p.y)
+                maxY = Math.max(maxY, p.y)
+              }
+              // 开局贴近营地（几顶帐篷占满画面），城市长大后稳定在街道级
+              const spanX = Math.max(14, maxX - minX + 20)
+              const spanY = Math.max(14, maxY - minY + 20)
+              const zoom = Math.max(
+                0.75,
+                Math.min(1.8, Math.min((view.w - 40) / (16 * spanX), (view.h - 60) / (16 * spanY))),
+              )
+              const target = {
+                x: sumW > 0 ? cx / sumW : s.world.size / 2,
+                y: sumW > 0 ? cy / sumW : s.world.size / 2,
+                zoom,
+              }
               followTargetRef.current = { key, camera: target }
             }
             const target = followTargetRef.current!.camera,
@@ -620,6 +648,26 @@ export default function App() {
       flashMsg('读取失败')
     }
   }
+  /** 从地块文明切回旧的沙盒 / 首年存档（旧存档不会被新版本覆盖） */
+  const loadLegacy = () => {
+    try {
+      const loaded = loadFrom(window.localStorage, AUTO_SAVE_KEY) ?? loadFrom(window.localStorage, SAVE_KEY)
+      if (!loaded) {
+        flashMsg('没有可继续的旧存档')
+        return
+      }
+      simRef.current = loaded
+      followRef.current = !!loaded.state.civilization
+      followTargetRef.current = null
+      walkersRef.current = []
+      setFollowing(followRef.current)
+      setSelection(null)
+      setEpoch((e) => e + 1)
+      flashMsg('已继续旧存档 ✓')
+    } catch {
+      flashMsg('旧存档读取失败')
+    }
+  }
   const reclaim = () => {
     const sel = selectionRef.current
     const sim = simRef.current!
@@ -846,6 +894,8 @@ export default function App() {
             onCityOverview={() => mapOverview(true)}
             onContinent={() => mapOverview(false)}
             onNewMode={(mode) => resetWorld(String(plotUi.seed), mode)}
+            onLoadLegacy={loadLegacy}
+            legacyAvailable={legacyKind(window.localStorage) !== 'none'}
           />
         ) : (
           <Sidebar

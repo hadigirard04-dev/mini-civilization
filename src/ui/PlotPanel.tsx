@@ -40,6 +40,8 @@ interface Props {
   onCityOverview: () => void
   onContinent: () => void
   onNewMode: (mode: 'plot' | 'sandbox' | 'survival') => void
+  onLoadLegacy: () => void
+  legacyAvailable: boolean
 }
 
 function bar(value: number, color: string): React.ReactNode {
@@ -108,6 +110,11 @@ export default function PlotPanel(props: Props) {
           </button>
         </div>
         {props.saveMsg && <div className="save-msg">{props.saveMsg}</div>}
+        {props.legacyAvailable && (
+          <button className="btn" onClick={props.onLoadLegacy}>
+            继续旧存档（沙盒 / 首年）
+          </button>
+        )}
       </section>
 
       <section className="panel">

@@ -1,7 +1,6 @@
-import { WATER } from '../world'
-import { BLOCK_SIZE } from './config'
 import { blockCoords, blockIndex, gridSize, isMountainBlock } from './blocks'
 import type { PlotState } from './types'
+import { streetPath } from './streets'
 
 /** 道路等级：0 无，1 土路，2 街，3 大道 */
 export type RoadDir = 'v' | 'h'
@@ -12,22 +11,6 @@ function vIndex(bx: number, by: number, bg: number): number {
 
 function hIndex(bx: number, by: number, bg: number): number {
   return blockIndex(bx, by, bg)
-}
-
-function blockHasWater(state: PlotState, index: number): boolean {
-  const b = state.blocks[index]
-  if (b.hasWater) return true
-  const bg = gridSize(state.world)
-  const { bx, by } = blockCoords(index, bg)
-  const first = by * BLOCK_SIZE
-  const firstX = bx * BLOCK_SIZE
-  for (let t = 0; t < BLOCK_SIZE; t++) {
-    if (state.world.tiles[first * state.world.size + firstX + t].terrain === WATER) return true
-    if (state.world.tiles[(first + t) * state.world.size + firstX].terrain === WATER) return true
-    if (state.world.tiles[(first + BLOCK_SIZE - 1) * state.world.size + firstX + t].terrain === WATER) return true
-    if (state.world.tiles[(first + t) * state.world.size + firstX + BLOCK_SIZE - 1].terrain === WATER) return true
-  }
-  return false
 }
 
 /** 读取一条边上的道路等级 */
@@ -46,11 +29,11 @@ export function isBridge(state: PlotState, dir: RoadDir, bx: number, by: number)
   if (dir === 'v') {
     const left = blockIndex(bx - 1, by, bg)
     const right = blockIndex(bx, by, bg)
-    return blockHasWater(state, left) || blockHasWater(state, right)
+    return streetPath(state, left, right).bridge
   }
   const top = blockIndex(bx, by - 1, bg)
   const bottom = blockIndex(bx, by, bg)
-  return blockHasWater(state, top) || blockHasWater(state, bottom)
+  return streetPath(state, top, bottom).bridge
 }
 
 /** 该边是否允许修路（两侧都不能是山地主导） */
@@ -58,10 +41,12 @@ export function canBuildRoad(state: PlotState, dir: RoadDir, bx: number, by: num
   const bg = gridSize(state.world)
   if (dir === 'v') {
     if (bx <= 0 || bx >= bg || by < 0 || by >= bg) return false
-    return !isMountainBlock(state.blocks[blockIndex(bx - 1, by, bg)]) && !isMountainBlock(state.blocks[blockIndex(bx, by, bg)])
+    const from = blockIndex(bx - 1, by, bg), to = blockIndex(bx, by, bg)
+    return !isMountainBlock(state.blocks[from]) && !isMountainBlock(state.blocks[to]) && streetPath(state, from, to).routable
   }
   if (by <= 0 || by >= bg || bx < 0 || bx >= bg) return false
-  return !isMountainBlock(state.blocks[blockIndex(bx, by - 1, bg)]) && !isMountainBlock(state.blocks[blockIndex(bx, by, bg)])
+  const from = blockIndex(bx, by - 1, bg), to = blockIndex(bx, by, bg)
+  return !isMountainBlock(state.blocks[from]) && !isMountainBlock(state.blocks[to]) && streetPath(state, from, to).routable
 }
 
 export function writeRoad(state: PlotState, dir: RoadDir, bx: number, by: number, level: number): void {
@@ -154,7 +139,7 @@ export function connectionRoute(state: PlotState, from: number, to: number, brid
       if (previous[next] >= 0) continue
       const e = edgeBetween(state, cur, next)
       if (!canBuildRoad(state, e.dir, e.bx, e.by)) continue
-      if (!bridges && isBridge(state, e.dir, e.bx, e.by)) continue
+      if (!bridges && !readRoad(state, e.dir, e.bx, e.by) && isBridge(state, e.dir, e.bx, e.by)) continue
       previous[next] = cur
       queue.push(next)
     }

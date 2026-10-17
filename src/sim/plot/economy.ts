@@ -1,6 +1,6 @@
 import type { Rng } from '../rng'
-import { CIVIC_SPEC, INDUSTRY_SPEC, PLOT, POLICY, POWER } from './config'
-import { gridSize, housingCapacityOf, neighbors4, neighbors8 } from './blocks'
+import { CIVIC_CAPACITY, CIVIC_SPEC, INDUSTRY_SPEC, PLOT, POLICY, POWER } from './config'
+import { gridSize, housingCapacityOf, neighbors8 } from './blocks'
 import { bfsRoadDistances } from './roads'
 import type { Block, Ledger, PlotState, PlotStats, Res } from './types'
 
@@ -74,6 +74,12 @@ function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v
 }
 
+export function civicCapacityOf(b: Block, planned = false): number {
+  if (b.zone !== 'civic' && b.zone !== 'park') return 0
+  const density = planned && b.construction?.kind === 'upgrade' ? b.density + 1 : b.density
+  return CIVIC_CAPACITY[Math.max(0, Math.min(4, density))]
+}
+
 /** 服务覆盖：市场/学校/诊所/公园按半径衰减；电力按供需；水按水厂与自然水体 */
 export function recomputeCoverage(state: PlotState): void {
   const bg = gridSize(state.world)
@@ -101,7 +107,9 @@ export function recomputeCoverage(state: PlotState): void {
           const sbx = s % bg
           const sby = Math.floor(s / bg)
           const d = Math.max(Math.abs(sbx - b.bx), Math.abs(sby - b.by))
-          if (d <= r) cov += 1 - PLOT.coverageFalloff * (d / r)
+          const sourceLevel = Math.max(1, state.blocks[s].density)
+          const radius = r + Math.floor((sourceLevel - 1) / 2)
+          if (d <= radius) cov += (1 + (sourceLevel - 1) * 0.18) * (1 - PLOT.coverageFalloff * (d / radius))
         }
       }
       const key = t === 'waterworks' ? 'water' : t
@@ -109,7 +117,11 @@ export function recomputeCoverage(state: PlotState): void {
     }
     if (b.hasWater) cur.water = Math.max(cur.water, 1)
   }
-  // 电力：全局供需比
+  recomputePowerCoverage(state)
+}
+
+/** Power changes every day; geometric service coverage only changes with planning. */
+export function recomputePowerCoverage(state: PlotState): void {
   const demand = powerDemand(state)
   const supply = state.ledger.production.electricity
   const ratio = demand > 0 ? clamp01(supply / demand) : 1
@@ -120,7 +132,7 @@ export function powerSupply(state: PlotState): number {
   let supply = 0
   for (const b of state.blocks) {
     if (b.zone === 'civic' && b.civic === 'powerplant' && b.density > 0) {
-      supply += CIVIC_SPEC.powerplant.output?.electricity ?? 0
+      supply += (CIVIC_SPEC.powerplant.output?.electricity ?? 0) * civicCapacityOf(b)
     }
   }
   return supply
@@ -129,14 +141,15 @@ export function powerSupply(state: PlotState): number {
 export function powerDemand(state: PlotState): number {
   // 工业时代之前没有电力需求（否则早期会显示供电率 0）
   if (state.era < 2) return 0
+  const targets = materialStockTargets(state)
   let demand = populationOf(state) * POWER.residentialPerPerson
   for (const b of state.blocks) {
     if (b.density <= 0) continue
-    if (b.zone === 'industry' && b.industry === 'factory') demand += POWER.factory
-    if (b.zone === 'industry' && b.industry === 'quarry') demand += POWER.quarry
-    if (b.zone === 'civic' && b.civic === 'waterworks') demand += POWER.waterworks
-    if (b.zone === 'civic' && b.civic === 'school') demand += POWER.school
-    if (b.zone === 'civic' && b.civic === 'clinic') demand += POWER.clinic
+    if (b.zone === 'industry' && b.industry === 'factory' && jobDemandOf(state, b, targets) > 0) demand += POWER.factory
+    if (b.zone === 'industry' && b.industry === 'quarry' && jobDemandOf(state, b, targets) > 0) demand += POWER.quarry
+    if (b.zone === 'civic' && b.civic === 'waterworks') demand += POWER.waterworks * civicCapacityOf(b)
+    if (b.zone === 'civic' && b.civic === 'school') demand += POWER.school * civicCapacityOf(b)
+    if (b.zone === 'civic' && b.civic === 'clinic') demand += POWER.clinic * civicCapacityOf(b)
   }
   return demand
 }
@@ -222,48 +235,59 @@ export function isGatherable(state: PlotState, b: Block): boolean {
   if (b.settlement >= 0) return true
   const bg = gridSize(state.world)
   const index = b.by * bg + b.bx
-  for (const nb of neighbors4(bg, index)) if (state.blocks[nb].settlement >= 0) return true
-  return false
+  return b.bx > 0 && state.blocks[index - 1].settlement >= 0 || b.bx + 1 < bg && state.blocks[index + 1].settlement >= 0
+    || b.by > 0 && state.blocks[index - bg].settlement >= 0 || b.by + 1 < bg && state.blocks[index + bg].settlement >= 0
+}
+
+/** Operating reserves grow with real fuel use instead of remaining at a village's stock target. */
+export function materialStockTargets(state: PlotState): { wood: number; stone: number } {
+  const fuel = state.ledger.production.electricity / 16
+  return {
+    wood: Math.max(PLOT.woodTarget, Math.ceil(Math.max(fuel, state.ledger.consumption.wood) * 20)),
+    stone: Math.max(PLOT.stoneTarget, Math.ceil(Math.max(fuel * 0.5, state.ledger.consumption.stone) * 20)),
+  }
 }
 
 /**
  * 采集决策（岗位与产出必须共用同一判定，否则会出现“派了采矿工却产出木材”的错位）：
  * 石料缺口优先开矿，其次木材缺口伐木；库存都够则没人去采集。
  */
-export function gatherKind(state: PlotState, b: Block): 'ore' | 'forest' | null {
-  if (b.zone !== 'none' || !isGatherable(state, b)) return null
-  const stoneShort = state.ledger.stone < PLOT.stoneTarget
-  const woodShort = state.ledger.wood < PLOT.woodTarget
+export function gatherKind(state: PlotState, b: Block, targets?: { wood: number; stone: number }): 'ore' | 'forest' | null {
+  if (b.zone !== 'none' || !b.hasOre && !b.hasForest || !isGatherable(state, b)) return null
+  const target = targets ?? materialStockTargets(state)
+  const stoneShort = state.ledger.stone < target.stone
+  const woodShort = state.ledger.wood < target.wood
   if (b.hasOre && stoneShort) return 'ore'
   if (b.hasForest && woodShort) return 'forest'
   return null
 }
 
 /** 岗位需求（每块） */
-export function jobDemandOf(state: PlotState, b: Block): number {
+export function jobDemandOf(state: PlotState, b: Block, targets?: { wood: number; stone: number }): number {
   if (b.zone === 'residential') return b.density > 0 ? PLOT.residentialJobsPerLevel * b.density : 0
   if (b.zone === 'agriculture') return b.density > 0 ? 3 * b.density : 0
   if (b.zone === 'industry') {
     if (b.density <= 0 || !b.industry) return 0
+    if (b.construction?.kind.startsWith('restore:') || b.construction?.kind.startsWith('redevelop:')) return 0
     const spec = INDUSTRY_SPEC[b.industry]
     // 库存够用就不必继续满负荷生产（避免木石钢堆成山）
-    if (b.industry === 'quarry' && state.ledger.stone > PLOT.stoneTarget * 3) return 0
+    if (b.industry === 'quarry' && state.ledger.stone > (targets ?? materialStockTargets(state)).stone * 3) return 0
     if (b.industry === 'factory' && state.ledger.steel > PLOT.steelTarget) return 0
     return spec.jobs * (1 + 0.2 * (b.density - 1))
   }
-  if (b.zone === 'civic') return b.density > 0 && b.civic ? CIVIC_SPEC[b.civic].jobs : 0
-  if (b.zone === 'park') return b.density > 0 ? 1 : 0
-  const gather = gatherKind(state, b)
+  if (b.zone === 'civic') return b.density > 0 && b.civic ? CIVIC_SPEC[b.civic].jobs * Math.sqrt(civicCapacityOf(b)) : 0
+  if (b.zone === 'park') return Math.sqrt(civicCapacityOf(b))
+  const gather = gatherKind(state, b, targets)
   if (gather === 'ore') return PLOT.gather.ore.jobs
   if (gather === 'forest') return PLOT.gather.forest.jobs
   return 0
 }
 
-function priorityOf(state: PlotState, b: Block): number {
+function priorityOf(state: PlotState, b: Block, target: { wood: number; stone: number }): number {
   const p = POLICY[state.policy]
   const l = state.ledger
-  const woodShort = l.wood < PLOT.woodTarget
-  const stoneShort = l.stone < PLOT.stoneTarget
+  const woodShort = l.wood < target.wood
+  const stoneShort = l.stone < target.stone
   if (b.zone === 'agriculture') return 200
   if (b.zone === 'none' && b.hasOre) return stoneShort ? 94 : 20
   if (b.zone === 'none' && b.hasForest) return woodShort ? 90 : 18
@@ -281,7 +305,7 @@ function priorityOf(state: PlotState, b: Block): number {
 }
 
 export function workshopCount(state: PlotState): number {
-  return state.blocks.filter((b) => b.zone === 'civic' && b.civic === 'workshop' && b.density > 0).length
+  return state.blocks.reduce((n, b) => n + (b.zone === 'civic' && b.civic === 'workshop' ? civicCapacityOf(b) : 0), 0)
 }
 
 /** 满员时的真实农业产能，供规划、配工与产出共用（在建田按落成后的一级计算）。 */
@@ -302,16 +326,30 @@ export function allocateWorkers(state: PlotState): void {
   const reserveDays = state.policy === 'food' ? 40 : 25
   const desiredFood = need * (state.policy === 'food' ? 1.35 : 1.1) + Math.max(0, need * reserveDays - l.food) / 30
   const farmLoad = Math.min(1, desiredFood / Math.max(1, fullFood))
-  const order = [...state.blocks].sort((a, b) => priorityOf(state, b) - priorityOf(state, a))
+  let cache = workerOrders.get(state)
+  if (!cache) {
+    cache = { order: new Array<number>(state.blocks.length), priorities: new Float64Array(state.blocks.length) }
+    workerOrders.set(state, cache)
+  }
+  const targets = materialStockTargets(state)
+  for (let i = 0; i < state.blocks.length; i++) {
+    cache.order[i] = i // stable row order for ties, also after save reconstruction
+    cache.priorities[i] = priorityOf(state, state.blocks[i], targets)
+  }
+  const { order, priorities } = cache
+  order.sort((a, b) => priorities[b] - priorities[a])
   let remaining = workers
-  for (const b of order) {
-    const demand = jobDemandOf(state, b)
+  for (const index of order) {
+    const b = state.blocks[index]
+    const demand = jobDemandOf(state, b, targets)
     b.jobs = demand
     const staffed = Math.min(demand * (b.zone === 'agriculture' ? farmLoad : 1), Math.max(0, remaining))
     b.staffed = staffed
     remaining -= staffed
   }
 }
+
+const workerOrders = new WeakMap<PlotState, { order: number[]; priorities: Float64Array }>()
 
 /** 每日结算：岗位分配 → 产出 → 消耗 → 人口动态 */
 export function settleDay(state: PlotState, rng: Rng): void {
@@ -320,23 +358,28 @@ export function settleDay(state: PlotState, rng: Rng): void {
   const workshops = workshopCount(state)
   const need = dailyFoodNeed(state)
 
-  // 电力：电站产出（受木石限制）
+  // Dispatch only what is requested. Spare installed capacity should not burn
+  // construction materials while factories are idle with full steel stocks.
+  const demand = powerDemand(state)
+  const available = state.blocks.reduce((n, b) => n + (b.civic === 'powerplant' && b.zone === 'civic' && b.jobs > 0
+    ? (CIVIC_SPEC.powerplant.output?.electricity ?? 0) * civicCapacityOf(b) * b.staffed / b.jobs : 0), 0)
+  const dispatch = available > 0 ? Math.min(1, demand / available) : 0
   let electricity = 0
   let plantWood = 0
   let plantStone = 0
   for (const b of state.blocks) {
     if (b.zone === 'civic' && b.civic === 'powerplant' && b.density > 0 && b.jobs > 0) {
-      const ratio = b.staffed / b.jobs
-      const woodNeed = (CIVIC_SPEC.powerplant.input?.wood ?? 0) * ratio
-      const stoneNeed = (CIVIC_SPEC.powerplant.input?.stone ?? 0) * ratio
+      const ratio = b.staffed / b.jobs * dispatch
+      const units = civicCapacityOf(b)
+      const woodNeed = (CIVIC_SPEC.powerplant.input?.wood ?? 0) * ratio * units
+      const stoneNeed = (CIVIC_SPEC.powerplant.input?.stone ?? 0) * ratio * units
       const fuel = Math.max(0, Math.min(1, woodNeed > 0 ? (l.wood - plantWood) / woodNeed : 1, stoneNeed > 0 ? (l.stone - plantStone) / stoneNeed : 1))
       plantWood += woodNeed * fuel
       plantStone += stoneNeed * fuel
-      electricity += (CIVIC_SPEC.powerplant.output?.electricity ?? 0) * ratio * fuel
+      electricity += (CIVIC_SPEC.powerplant.output?.electricity ?? 0) * ratio * fuel * units
     }
   }
   l.electricity = electricity
-  const demand = powerDemand(state)
   const powerRatio = demand > 0 ? Math.min(1, electricity / demand) : 1
   for (const b of state.blocks) b.covered.power = powerRatio
 
@@ -344,24 +387,23 @@ export function settleDay(state: PlotState, rng: Rng): void {
   const factories = state.blocks.filter((b) => b.zone === 'industry' && b.industry === 'factory' && b.density > 0)
   let factoryWood = 0
   let factoryStone = 0
-  let factoryPower = 0
   for (const b of factories) {
     const ratio = b.jobs > 0 ? b.staffed / b.jobs : 0
     const spec = INDUSTRY_SPEC.factory
     factoryWood += (spec.input.wood ?? 0) * ratio
     factoryStone += (spec.input.stone ?? 0) * ratio
-    if (state.era >= 2) factoryPower += (spec.input.electricity ?? 0) * ratio
   }
   const factoryLimit = Math.max(0, Math.min(
     1,
     factoryWood > 0 ? (l.wood - plantWood) / factoryWood : 1,
     factoryStone > 0 ? (l.stone - plantStone) / factoryStone : 1,
-    factoryPower > 0 ? electricity / factoryPower : 1,
+    state.era >= 2 ? powerRatio : 1,
   ))
 
   // 产出与消耗
   const prod: Record<Res, number> = { food: 0, wood: 0, stone: 0, steel: 0, electricity }
-  const cons: Record<Res, number> = { food: 0, wood: plantWood, stone: plantStone, steel: 0, electricity: 0 }
+  const cons: Record<Res, number> = { food: 0, wood: plantWood, stone: plantStone, steel: 0,
+    electricity: state.era >= 2 ? populationOf(state) * POWER.residentialPerPerson * powerRatio : 0 }
   const policy = POLICY[state.policy]
 
   for (const b of state.blocks) {
@@ -381,6 +423,7 @@ export function settleDay(state: PlotState, rng: Rng): void {
       const ore = Math.min(l.oreReserve, 1 * ratio)
       prod.stone += (INDUSTRY_SPEC.quarry.output.stone ?? 0) * ratio * b.logistics * level * (l.oreReserve > 0 ? 1 : 0)
       l.oreReserve = Math.max(0, l.oreReserve - ore)
+      if (state.era >= 2) cons.electricity += POWER.quarry * ratio * powerRatio
     } else if (b.zone === 'industry' && b.industry === 'factory') {
       const level = 1 + 0.25 * (b.density - 1)
       const spec = INDUSTRY_SPEC.factory
@@ -392,20 +435,22 @@ export function settleDay(state: PlotState, rng: Rng): void {
       if (state.era >= 2) cons.electricity += (spec.input.electricity ?? 0) * scale
     } else if (b.zone === 'civic' && b.civic && b.civic !== 'powerplant') {
       const spec = CIVIC_SPEC[b.civic]
+      const units = civicCapacityOf(b)
       const out = spec.output
       if (out) {
-        prod.food += (out.food ?? 0) * ratio
-        prod.wood += (out.wood ?? 0) * ratio
-        prod.stone += (out.stone ?? 0) * ratio
-        prod.steel += (out.steel ?? 0) * ratio
-        l.knowledge += (out.knowledge ?? 0) * ratio * (b.civic === 'school' ? policy.school : 1)
+        prod.food += (out.food ?? 0) * ratio * units
+        prod.wood += (out.wood ?? 0) * ratio * units
+        prod.stone += (out.stone ?? 0) * ratio * units
+        prod.steel += (out.steel ?? 0) * ratio * units
+        l.knowledge += (out.knowledge ?? 0) * ratio * units * (b.civic === 'school' ? policy.school : 1)
       }
       const input = spec.input
       if (input) {
-        cons.wood += (input.wood ?? 0) * ratio
-        cons.stone += (input.stone ?? 0) * ratio
-        cons.electricity += (input.electricity ?? 0) * ratio
+        cons.wood += (input.wood ?? 0) * ratio * units
+        cons.stone += (input.stone ?? 0) * ratio * units
+        if (state.era >= 2) cons.electricity += (input.electricity ?? 0) * ratio * units * powerRatio
       }
+      if (state.era >= 2 && (b.civic === 'school' || b.civic === 'clinic')) cons.electricity += POWER[b.civic] * ratio * units * powerRatio
     }
   }
 
@@ -420,7 +465,7 @@ export function settleDay(state: PlotState, rng: Rng): void {
   l.production = prod
   l.consumption = { ...cons, food: l.consumption.food }
   l.storageCapacity = state.blocks.reduce((n, b) => {
-    if (b.zone === 'civic' && b.civic && b.density > 0) return n + (CIVIC_SPEC[b.civic].storage ?? 0)
+    if (b.zone === 'civic' && b.civic && b.density > 0) return n + (CIVIC_SPEC[b.civic].storage ?? 0) * civicCapacityOf(b)
     return n
   }, 900)
   if (l.food > l.storageCapacity) l.food = l.storageCapacity

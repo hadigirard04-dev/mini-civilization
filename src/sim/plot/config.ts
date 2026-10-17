@@ -53,6 +53,9 @@ export const PLOT = {
   upgradeLandValue: [0, 0, 0.3, 0.45, 0.6],
   /** 升级还要求城市整体入住率（不按单块，避免给未来人口预留的住房卡住升级） */
   upgradeOccupancy: 0.55,
+  /** Higher density needs a mature local neighborhood, not just a global era unlock. */
+  upgradeSettlementPopulation: [0, 0, 0, 600, 2200],
+  upgradeResidentialNeighbors: [0, 0, 0, 2, 3],
   /** 住宅区就业（商业服务岗位/块） */
   residentialJobsPerLevel: 3,
 
@@ -67,9 +70,9 @@ export const PLOT = {
   /** 钢材库存目标：够了就减产 */
   steelTarget: 4000,
   /** 已有这么多“临路可建空地”时不再开路（让路网服务需求而不是铺满地图） */
-  freeLandTarget: 12,
-  /** 按本地人口为住房、岗位和服务预留混合用地；每城最多保留 40 块空地。 */
-  freeLandResidentsPerBlock: 10,
+  freeLandTarget: 4,
+  /** 小量沿街储备用地，避免未开发道路比城区还大。 */
+  freeLandResidentsPerBlock: 120,
 
   /** 农业：每块每日产粮（density 1 起，每级 +22%） */
   farm: { food: 30, levelBonus: 0.22 },
@@ -156,6 +159,9 @@ export interface CivicSpec {
   input?: Partial<Record<Res, number>>
   storage?: number
 }
+
+/** 公共设施可在原址扩建；不再为每一份服务能力占一整个新地块。 */
+export const CIVIC_CAPACITY = [0, 1, 2, 4, 8] as const
 
 export const CIVIC_SPEC: Record<CivicKind, CivicSpec> = {
   /** 广场：居民在城郊拾捡木石，是早期不会断料的安全阀 */

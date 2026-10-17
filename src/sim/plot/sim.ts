@@ -15,6 +15,7 @@ import {
   recomputeLandValue,
   recomputeLogistics,
   recomputePollution,
+  recomputePowerCoverage,
   recomputeStats,
   settleDay,
   type Requirement,
@@ -121,6 +122,7 @@ export class PlotSim {
     foundFirstSettlement(state, sim.rng)
     runPlannerCycle(state, sim.rng)
     distributePopulation(state)
+    recomputePowerCoverage(state)
     recomputeStats(state)
     updateSettlementTotals(state)
     milestone(state, 'founded', '部落在选定的河湾落脚，开始修筑道路')
@@ -185,6 +187,7 @@ export class PlotSim {
     if (day > 0 && day % PLOT.migrationEveryDays === 0) runMonthCycle(state, this.rng)
     // 出生、死亡与迁入发生后再分布人口，聚落面板与全局账本使用同一时刻。
     distributePopulation(state)
+    recomputePowerCoverage(state)
     recomputeStats(state)
     updateSettlementTotals(state)
     this.recordMilestones()
@@ -256,7 +259,7 @@ export class PlotSim {
 
   /** 载入后重建派生字段（覆盖/地价/物流/污染/人口分布） */
   static refreshDerived(state: PlotState, rng: Rng): void {
-    for (const b of state.blocks) rebuildBlockBuildings(b, rng)
+    for (const b of state.blocks) rebuildBlockBuildings(b, rng, state)
     recomputePollution(state)
     recomputeCoverage(state)
     recomputeLandValue(state)

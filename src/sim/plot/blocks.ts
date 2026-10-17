@@ -1,7 +1,8 @@
-import { createRng, type Rng } from '../rng'
+import type { Rng } from '../rng'
 import { FOREST, GRASS, HILLS, MOUNTAIN, STONE, WATER, WETLAND, type World } from '../world'
 import { BLOCK_SIZE, PLOT } from './config'
-import type { Block, BlockBuilding, Zone } from './types'
+import type { Block, PlotState, Zone } from './types'
+import { ensureBlockLayout } from './layout'
 
 export const ZONE_COLORS: Record<Zone, string> = {
   none: 'rgba(0,0,0,0)',
@@ -135,63 +136,9 @@ export function isFertile(block: Block): boolean {
   return block.terrain === GRASS || block.terrain === WETLAND || block.terrain === FOREST
 }
 
-/** 街区布局：在一格里铺出成片的 1 格建筑（视觉密度随等级提高） */
-function scatterBuildings(
-  out: BlockBuilding[],
-  kind: string,
-  count: number,
-  rng: Rng,
-  slots = 6,
-  spacing = 1.3,
-): void {
-  const cells: Array<[number, number]> = []
-  for (let j = 0; j < slots; j++) {
-    for (let i = 0; i < slots; i++) cells.push([0.4 + i * spacing, 0.4 + j * spacing])
-  }
-  // 洗牌后取前 count 个，位置在同一小区块内稳定（同一 rng 序列可复现）
-  for (let i = cells.length - 1; i > 0; i--) {
-    const j = Math.floor(rng.next() * (i + 1))
-    const tmp = cells[i]
-    cells[i] = cells[j]
-    cells[j] = tmp
-  }
-  for (let i = 0; i < Math.min(count, cells.length); i++) {
-    const [tx, ty] = cells[i]
-    out.push({ kind, tx, ty, w: 1, h: 1 })
-  }
-}
-
-/** 建筑描述符：仅渲染用，zone/density 变化时重建 */
-export function rebuildBlockBuildings(block: Block, _simulationRng: Rng): void {
-  // 美术布局不能消耗模拟随机数，否则读取存档重画建筑会改变后续出生与死亡。
-  const rng = createRng((block.bx * 73856093 ^ block.by * 19349663 ^ block.density * 83492791) >>> 0)
-  const out: BlockBuilding[] = []
-  if (block.zone === 'residential' && block.density > 0) {
-    scatterBuildings(out, 'house', [0, 9, 16, 24, 32][Math.min(4, block.density)], rng, 8, 0.82)
-  } else if (block.zone === 'agriculture' && block.density > 0) {
-    const patches = 1 + Math.min(3, block.density - 1)
-    for (let i = 0; i < patches; i++) {
-      const gx = i % 2
-      const gy = Math.floor(i / 2) % 2
-      out.push({ kind: 'field', tx: 0.3 + gx * 3.6, ty: 0.3 + gy * 3.6, w: 3.4, h: 3.4 })
-    }
-    out.push({ kind: 'farmhouse', tx: 6.2, ty: 6.2, w: 1, h: 1 })
-  } else if (block.zone === 'industry' && block.density > 0) {
-    const kind = block.industry === 'quarry' ? 'quarry' : 'factory'
-    out.push({ kind, tx: 3.5, ty: 4.5, w: 1, h: 1 })
-    if (block.density >= 2) out.push({ kind, tx: 5.6, ty: 5.6, w: 1, h: 1 })
-    if (block.density >= 3) out.push({ kind, tx: 2.2, ty: 5.8, w: 1, h: 1 })
-  } else if (block.zone === 'civic' && block.civic) {
-    const art: Record<string, string> = { plaza: 'campfire', waterworks: 'well' }
-    out.push({ kind: art[block.civic] ?? block.civic, tx: 3.5, ty: 4.5, w: 1, h: 1 })
-  } else if (block.zone === 'park' && block.density > 0) {
-    scatterBuildings(out, 'park', 4 + block.density, rng, 5, 1.5)
-  } else if (block.zone === 'none') {
-    if (block.hasForest || block.hasOre) {
-      scatterBuildings(out, 'hut', 2, rng, 4, 2.2)
-    }
-  }
-  block.buildings = out
+/** 美术几何不能消耗经济与人口的随机序列。 */
+export function rebuildBlockBuildings(block: Block, _simulationRng: Rng, state: PlotState): void {
+  ensureBlockLayout(state, block)
 }
 
 /** 区块住房容量（按等级） */

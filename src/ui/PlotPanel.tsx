@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react'
 import StatsChart from './StatsChart'
-import { ERAS, ERA_SUBTITLES, POLICY } from '../sim/plot/config'
+import { CIVIC_SPEC, ERAS, ERA_SUBTITLES, INDUSTRY_SPEC, POLICY } from '../sim/plot/config'
 import { ZONE_LABELS } from '../sim/plot/blocks'
-import { RES_LABELS } from '../sim/plot/economy'
+import { civicCapacityOf, RES_LABELS } from '../sim/plot/economy'
 import type { PlotView } from '../sim/plot/sim'
 import type { Block, Overlay, Policy, Res } from '../sim/plot/types'
 import type { Camera } from '../render/camera'
@@ -19,6 +19,14 @@ const OVERLAYS: Array<{ key: Overlay; label: string }> = [
 ]
 
 const POLICIES: Policy[] = ['balanced', 'food', 'growth', 'science', 'livable']
+const ZONE_HINTS: Record<Block['zone'], string> = {
+  none: '临路土地按实际需求开发；采集林地承担城市的原料供给。',
+  residential: '人口、相邻住宅与地价同时达标后才会升高，高层集中在成熟街区。',
+  agriculture: '田地随粮食需求扩产；物流与供电影响实际收成。',
+  industry: '产能与库存决定是否开工；闲置厂地可改作公共设施或复育林地。',
+  civic: '公共设施可在原址扩建，优先填补有居民的服务缺口。',
+  park: '公园改善附近地价，让发展中的住宅区保留绿地。',
+}
 const POLICY_DETAILS: Record<Policy, string> = {
   balanced: '兼顾生产、建设与服务；粮食充足时，让劳动力转入其他岗位。',
   food: '农业产能 +25%，储备目标 40 天；投入更多劳动力保粮，建设与研究会放缓。',
@@ -46,6 +54,7 @@ interface Props {
   onFollow: () => void
   onCityOverview: () => void
   onContinent: () => void
+  onSettlement: (id: number) => void
   onNewMode: (mode: 'plot' | 'sandbox' | 'survival') => void
   onLoadLegacy: () => void
   legacyAvailable: boolean
@@ -65,6 +74,15 @@ function formatRequirement(r: { label: string; value: number; target: number; me
   const value = isFloat ? r.value.toFixed(2) : Math.round(r.value).toLocaleString('zh-CN')
   const target = isFloat ? r.target.toFixed(2) : String(r.target)
   return `${value} / ${target}${isPercent ? '%' : ''}`
+}
+
+function constructionLabel(kind: string): string {
+  if (kind === 'upgrade') return '原址扩建'
+  if (kind === 'restore:forest') return '复育林地'
+  const [action, name] = kind.split(':')
+  if (action === 'civic' || action === 'redevelop') return `${action === 'redevelop' ? '改造为' : '建设'}${CIVIC_SPEC[name as keyof typeof CIVIC_SPEC]?.name ?? '公共设施'}`
+  if (action === 'industry') return `建设${INDUSTRY_SPEC[name as keyof typeof INDUSTRY_SPEC]?.name ?? '工业设施'}`
+  return `建设${ZONE_LABELS[name as keyof typeof ZONE_LABELS] ?? '地块'}`
 }
 
 export default function PlotPanel(props: Props) {
@@ -150,7 +168,7 @@ export default function PlotPanel(props: Props) {
           <div className="stat">
             <span className="stat-label">地块（已开发）</span>
             <span className="stat-value">
-              {view.stats.residentialBlocks + view.stats.agricultureBlocks + view.stats.industryBlocks + view.stats.civicBlocks}
+              {state.blocks.reduce((n, b) => n + Number(b.zone !== 'none'), 0)}
             </span>
           </div>
         </div>
@@ -211,7 +229,7 @@ export default function PlotPanel(props: Props) {
         <div className="panel-title">聚落</div>
         {view.settlements.map((s) => (
           <div className="detail-row" key={s.id}>
-            <span className="farm-tag">{s.name}</span>
+            <button className="settlement-focus" onClick={() => props.onSettlement(s.id)} aria-label={`查看${s.name}`}>{s.name} ↗</button>
             <span>{Math.round(s.population)} 人</span>
             <span className="v-name">
               {s.blocks.length} 块 · 岗位 {Math.round(s.jobs)} · {s.links.length > 0 ? '已连通' : '未连通'}
@@ -320,9 +338,12 @@ export default function PlotPanel(props: Props) {
           <div className="detail-row">
             <span>{ZONE_LABELS[selection.zone]}</span>
             <span className="v-name">
-              {selection.civic ? selection.civic : selection.industry ? selection.industry : `等级 ${selection.density}`}
+              {selection.civic ? `${CIVIC_SPEC[selection.civic].name} · ${selection.density} 级` : selection.industry ? INDUSTRY_SPEC[selection.industry].name : `等级 ${selection.density}`}
             </span>
           </div>
+          {(selection.zone === 'civic' || selection.zone === 'park') && selection.density > 0 && (
+            <div className="detail-row"><span>设施规模</span><span className="v-name">{civicCapacityOf(selection)} 份服务能力 · 可在原址扩建</span></div>
+          )}
           <div className="detail-row">
             <span>人口 / 岗位</span>
             <span className="v-name">
@@ -355,7 +376,7 @@ export default function PlotPanel(props: Props) {
             <div className="detail-row">
               <span>在建</span>
               <span className="v-name">
-                {selection.construction.kind} {(selection.construction.progress * 100).toFixed(0)}%
+                {constructionLabel(selection.construction.kind)} {(selection.construction.progress * 100).toFixed(0)}%
               </span>
             </div>
           )}
@@ -369,7 +390,7 @@ export default function PlotPanel(props: Props) {
             </span>
           </div>
           <div className={`hint status ${status(selection.buildable)}`}>
-            人口密度与地价决定这里能长到几级；工业与住宅不得相邻。
+            {ZONE_HINTS[selection.zone]}
           </div>
         </section>
       )}

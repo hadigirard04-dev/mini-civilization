@@ -1,6 +1,6 @@
 import { housingCapacityOf } from './blocks'
 import { PLOT, POLICY } from './config'
-import { dailyFoodNeed, farmDailyOutput, jobDemandOf, populationOf, workshopCount } from './economy'
+import { civicCapacityOf, dailyFoodNeed, farmDailyOutput, jobDemandOf, populationOf, powerDemand, powerSupply, workshopCount } from './economy'
 import type { Block, PlotState } from './types'
 
 export function plannedHousingOf(b: Block): number {
@@ -32,7 +32,7 @@ export function developmentDemand(state: PlotState) {
       foodCapacity += farmDailyOutput(state, b, workshops)
       if (settlement) settlement.farms++
     }
-    if (b.zone === 'park' || b.civic === 'park' || b.construction?.kind === 'civic:park') parks++
+    if (b.zone === 'park' || b.civic === 'park' || b.construction?.kind === 'civic:park') parks += Math.max(1, civicCapacityOf(b, true))
     if (b.zone === 'industry' && b.density === 0) jobs += b.industry === 'quarry' ? 5 : 8
   }
   const foodTarget = dailyFoodNeed(state) * (state.policy === 'food' ? 1.5 : 1.2)
@@ -83,10 +83,14 @@ export function developmentView(state: PlotState): DevelopmentView {
   }
   const young = state.settlements.find((s) => s.id > 0 && (demand.local.get(s.id)?.homes ?? 0) < 2)
   if (young) return result(`${young.name}正在起步`, '新聚落会优先取得自己的住宅与农田；全球住房富余也不会让它停止发育。', 'growth')
+  const renewal = state.blocks.filter((b) => b.construction?.kind.startsWith('restore:') || b.construction?.kind.startsWith('redevelop:'))
+  if (renewal.length) return result('用地正在更新', `${renewal.length} 处闲置厂地正在改造为公共设施或复育林地，补充城区所需的服务与原料。`, null)
   if (demand.housingGap > 0) return result('住房需要扩充', `已有与在建住房合计 ${demand.housing} 人容量，还需约 ${Math.ceil(demand.housingGap)} 个居住名额。`, 'growth')
-  if (state.era === 1 && state.stats.roadEdges < 60) return result('连起城镇骨架', `下一时代需要 60 条道路边，目前 ${state.stats.roadEdges} 条；扩张政策会加快这一轮路网建设。`, 'growth')
+  if (state.era === 1 && state.stats.roadEdges < 60) return result('连起城镇骨架', `下一时代需要 60 条道路连接，目前 ${state.stats.roadEdges} 条；城区会随住房、就业需求扩展，街区之间补上回路。`, 'growth')
   if (state.era >= 2 && state.stats.powerCoverage < 0.9) {
-    return result('供电不足', '覆盖采用当天实际发电量；缺燃料或缺工会影响供电，继续增加装机容量未必有效。', 'balanced')
+    const capacity = powerSupply(state), demand = powerDemand(state)
+    return capacity < demand ? result('电站容量不足', `当前需求 ${demand.toFixed(0)}，装机 ${capacity.toFixed(0)}；会优先扩建电站，必要时改造闲置厂地。`, 'balanced')
+      : result('燃料或人员紧张', '装机已经够用；发电按实际需求消耗木石，城市会保留采集林地，并在需要时复育闲置厂地。', 'balanced')
   }
   const homes = state.blocks.filter((b) => b.zone === 'residential' && b.density > 0)
   const lowService = homes.some((b) => b.covered.market < 0.5 || b.covered.park < 0.5)

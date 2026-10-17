@@ -545,6 +545,19 @@ body {
   font-size: 12px;
 }
 
+.settlement-focus {
+  border: 0;
+  padding: 4px 0;
+  color: #a8bf76;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.settlement-focus:hover { color: #ead19b; }
+.settlement-focus:focus-visible { outline: 1px solid #e0a83c; outline-offset: 4px; }
+@media (max-width: 700px) { .settlement-focus { min-height: 44px; } }
+
 /* 纪事 */
 .journal-list {
   list-style: none;

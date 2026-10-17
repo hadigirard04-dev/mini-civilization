@@ -48,6 +48,7 @@ function smoke(ctx: CanvasRenderingContext2D, x: number, y: number, time: number
 
 function drawLocal(ctx: CanvasRenderingContext2D, b: Building, art: ArtContext, time: number, detail: boolean, power: number) {
   const kind = b.type ?? 'house', level = b.level ?? 0, era = art.era
+  const variant = b.id % 4
   ctx.fillStyle = kind === 'house' && level < 2 ? '#b49a67' : '#b4b5a4'
   ctx.fillRect(-2, -1, 21, 19)
   ctx.fillStyle = 'rgba(12,22,23,.28)'
@@ -113,11 +114,11 @@ function drawLocal(ctx: CanvasRenderingContext2D, b: Building, art: ArtContext, 
     return
   }
   if (kind === 'house' && level === 1) {
-    ctx.fillStyle = '#ac8150'
+    ctx.fillStyle = ['#ac8150', '#b39869', '#a38463', '#c0a17c'][variant]
     ctx.fillRect(0, 1, 17, 14)
     ctx.fillStyle = '#785438'
     for (let y = 4; y < 14; y += 4) ctx.fillRect(0, y, 17, 1)
-    shape(ctx, '#b6643e', [[-3, 3], [7, -13], [19, 3]])
+    shape(ctx, ['#b6643e', '#86765e', '#a2694c', '#897b66'][variant], [[-3, 3], [7, -13], [19, 3]])
     shape(ctx, '#78452f', [[7, -13], [19, 3], [12, 3]])
     ctx.fillStyle = '#ead8a3'
     ctx.fillRect(2, 6, 4, 4)
@@ -127,7 +128,7 @@ function drawLocal(ctx: CanvasRenderingContext2D, b: Building, art: ArtContext, 
     return
   }
   if (kind === 'house' && level === 2) {
-    ctx.fillStyle = '#c38c68'
+    ctx.fillStyle = ['#c38c68', '#c7b38c', '#ae9177', '#b8ae95'][variant]
     ctx.fillRect(0, -10, 16, 25)
     ctx.fillStyle = '#8a624c'
     ctx.fillRect(13, -10, 4, 25)
@@ -140,7 +141,7 @@ function drawLocal(ctx: CanvasRenderingContext2D, b: Building, art: ArtContext, 
     return
   }
   if (kind === 'house' && level === 3) {
-    ctx.fillStyle = '#c1b59b'
+    ctx.fillStyle = ['#c1b59b', '#b7b6a4', '#c5aa8b', '#a7b4ad'][variant]
     ctx.fillRect(-1, -29, 17, 44)
     ctx.fillStyle = '#877c71'
     ctx.fillRect(13, -29, 5, 44)
@@ -260,7 +261,7 @@ function drawLocal(ctx: CanvasRenderingContext2D, b: Building, art: ArtContext, 
 export function drawCivicBuilding(ctx: CanvasRenderingContext2D, b: Building, art: ArtContext,
   time: number, detail = true, power = 1) {
   const kind = b.type ?? 'house'
-  const variant = kind === 'skyscraper' || (kind === 'house' && (b.level ?? 0) >= 4) ? b.id % 20 : 0
+  const variant = kind === 'skyscraper' || (kind === 'house' && (b.level ?? 0) >= 4) ? b.id % 20 : kind === 'house' ? b.id % 4 : 0
   const key = `${kind}/${b.level ?? 0}/${variant}/${kind === 'campfire' ? art.era : 0}/${Number(detail)}`
   let sprite = sprites.get(key)
   if (!sprite) {

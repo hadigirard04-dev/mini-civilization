@@ -1,4 +1,5 @@
 import { civilizationView, ERAS, type ConstructionKind, type CivilizationView } from './sim/civilization'
+import { version } from '../package.json'
 import MiniMap from './ui/MiniMap'
 import { buildingCount, survivalView, SEASONS, type BuildingKind } from './sim/survival'
 import { CampaignDialog } from './ui/SurvivalPanel'
@@ -8,6 +9,7 @@ import { render, type View } from './render/draw'
 import { drawEntities, type Selection } from './render/entities'
 import { buildTerrainCanvas, patchTerrainCanvas } from './render/terrain'
 import { createWalkers, drawPlot, updateWalkers, type Walker } from './render/plot'
+import { framePlotSettlement } from './render/plot-camera'
 import { AUTO_SAVE_KEY, loadFrom, saveTo, SAVE_KEY } from './sim/save'
 import {
   PLOT_AUTO_SAVE_KEY,
@@ -33,7 +35,7 @@ type AnySim = PlotSim | Simulation
 type NewMode = 'plot' | 'sandbox' | 'survival' | 'evolution'
 
 function isPlot(sim: AnySim): sim is PlotSim {
-  return sim instanceof PlotSim
+  return 'blocks' in sim.state && 'vRoad' in sim.state
 }
 
 function randomSeed(): number {
@@ -146,6 +148,7 @@ export default function App() {
   const worldVersionRef = useRef(0)
   const followRef = useRef(isPlot(simRef.current!) || !!simRef.current!.state.civilization)
   const followTargetRef = useRef<{ key: string; camera: Camera } | null>(null)
+  const plotFocusRef = useRef(0)
   const walkersRef = useRef<Walker[]>([])
 
   if (import.meta.env.DEV) {
@@ -215,6 +218,7 @@ export default function App() {
   useEffect(() => {
     let raf = 0
     let last = performance.now()
+    let sampledSim = simRef.current
     let sampledAt = last,
       frames = 0,
       sampledTick = simRef.current!.state.tick
@@ -222,6 +226,13 @@ export default function App() {
       const dt = Math.min(0.25, (time - last) / 1000)
       last = time
       const sim = simRef.current
+      if (sim && sim !== sampledSim) {
+        sampledSim = sim
+        sampledTick = sim.state.tick
+        sampledAt = time
+        frames = 0
+        setRuntime({ fps: 0, speed: 0 })
+      }
       const terrain = terrainRef.current
       const canvas = canvasRef.current
       const ctx = canvas?.getContext('2d')
@@ -234,43 +245,9 @@ export default function App() {
           if (followRef.current && claimed.length > 0) {
             const s = state,
               view = viewRef.current
-            const key = `${s.world.seed}/${claimed.length}/${view.w}/${view.h}`
+            const key = `${s.world.seed}/${plotFocusRef.current}/${claimed.length}/${s.stats.housingCapacity}/${view.w}/${view.h}`
             if (followTargetRef.current?.key !== key) {
-              // 地块文明的城市可能离地图中心很远，取景只用城市自身（并按发展重心居中）
-              const points = claimed.map((b) => ({
-                x: (b.bx + 0.5) * BLOCK_SIZE,
-                y: (b.by + 0.5) * BLOCK_SIZE,
-                w: b.zone === 'none' ? 0.2 : 1 + b.density * 0.5,
-              }))
-              let sumW = 0
-              let cx = 0
-              let cy = 0
-              let minX = Infinity
-              let maxX = -Infinity
-              let minY = Infinity
-              let maxY = -Infinity
-              for (const p of points) {
-                sumW += p.w
-                cx += p.x * p.w
-                cy += p.y * p.w
-                minX = Math.min(minX, p.x)
-                maxX = Math.max(maxX, p.x)
-                minY = Math.min(minY, p.y)
-                maxY = Math.max(maxY, p.y)
-              }
-              // 开局贴近营地（几顶帐篷占满画面），城市长大后稳定在街道级
-              const spanX = Math.max(14, maxX - minX + 20)
-              const spanY = Math.max(14, maxY - minY + 20)
-              const zoom = Math.max(
-                0.75,
-                Math.min(1.8, Math.min((view.w - 40) / (16 * spanX), (view.h - 60) / (16 * spanY))),
-              )
-              const target = {
-                x: sumW > 0 ? cx / sumW : s.world.size / 2,
-                y: sumW > 0 ? cy / sumW : s.world.size / 2,
-                zoom,
-              }
-              followTargetRef.current = { key, camera: target }
+              followTargetRef.current = { key, camera: framePlotSettlement(s, plotFocusRef.current, view.w, view.h) }
             }
             const target = followTargetRef.current!.camera,
               alpha = 1 - Math.exp(-dt * 4)
@@ -326,7 +303,7 @@ export default function App() {
           const seconds = (time - sampledAt) / 1000
           setRuntime({
             fps: Math.round(frames / seconds),
-            speed: Math.max(0, (sim.state.tick - sampledTick) / sim.tickRate / seconds),
+            speed: sim.paused ? 0 : Math.max(0, (sim.state.tick - sampledTick) / sim.tickRate / seconds),
           })
           sampledAt = time
           sampledTick = sim.state.tick
@@ -553,6 +530,7 @@ export default function App() {
     const sim = simRef.current!
     if (sim.blocked) return
     sim.paused = !sim.paused
+    if (sim.paused) setRuntime((previous) => ({ ...previous, speed: 0 }))
     if (isPlot(sim)) setPlotUi((prev) => (prev ? { ...prev, paused: sim.paused } : prev))
     else setUi((prev) => (prev ? { ...prev, paused: sim.paused } : prev))
   }
@@ -574,6 +552,7 @@ export default function App() {
     followRef.current = resolved === 'plot'
     followTargetRef.current = null
     walkersRef.current = []
+    plotFocusRef.current = 0
     setFollowing(followRef.current)
     const half = next.state.world.size / 2
     camRef.current = { x: half, y: half, zoom: resolved === 'plot' ? 0.55 : camRef.current.zoom }
@@ -622,6 +601,7 @@ export default function App() {
           return
         }
         simRef.current = loaded
+        plotFocusRef.current = loaded.state.settlements[0]?.id ?? 0
         followRef.current = true
         followTargetRef.current = null
         walkersRef.current = []
@@ -807,7 +787,7 @@ export default function App() {
               <div className="city-map-heading">
                 <b>{plotUi.eraName}</b>
                 <span>
-                  {Math.round(plotUi.population)} 人 · {plotUi.settlements.length} 聚落 · v0.6.1
+                  {Math.round(plotUi.population)} 人 · {plotUi.settlements.length} 聚落 · v{version}
                 </span>
                 <small>
                   {runtime.fps} FPS · 实速 {runtime.speed.toFixed(1)}× / 目标 {plotUi.speed}×
@@ -894,6 +874,15 @@ export default function App() {
             }}
             onCityOverview={() => mapOverview(true)}
             onContinent={() => mapOverview(false)}
+            onSettlement={(id) => {
+              plotFocusRef.current = id
+              followRef.current = true
+              followTargetRef.current = null
+              setFollowing(true)
+              if (window.matchMedia('(max-width: 860px)').matches) {
+                wrapRef.current?.scrollIntoView({ block: 'start', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+              }
+            }}
             onNewMode={(mode) => resetWorld(String(plotUi.seed), mode)}
             onLoadLegacy={loadLegacy}
             legacyAvailable={legacyKind(window.localStorage) !== 'none'}
